@@ -1,0 +1,64 @@
+
+gstplay is a fast basic media player using GStreamer and GTK+. It can be
+compiled with any combination of GStreamer (0.10.18+ or 1.0) and GTK+
+(2.x or 3.x) versions. GStreamer 1.0 is recommended as it is faster and
+is the version primarily used during development.
+
+The goal of gstplay is to provide minimal overhead and fast playback on
+lower-end systems, using hardware acceleration (such as xvimagesink and
+accelerated libav plugins) where available. To achieve this it does not
+use a double-buffered window and supports viewing files with all audio
+decoding disabled. It has been developed on an ARM platform.
+
+This is an early development release that has not yet been tested on a
+wide variety of media formats (only with mp4-type files on disk). Things
+like playlists and sliders and not (yet) supported.
+
+*** Requirements ***
+
+The GStreamer and GTK+-specific development headers and libraries need
+to be installed. On a Debian-based Linux system, this includes the
+following packages:
+
+libglib2.0-dev
+libgstreamer0.10-dev (when compiling for GStreamer 0.10)
+libgstreamer1.0-dev (when compiling for GStreamer 1.0)
+libgtk2.0-dev (when compiling for GTK+ 2)
+libgtk-3-dev (when compiling for GTK+ 3)
+
+You may also need any of the following packages for GStreamer 0.10 and
+1.0 respectively:
+
+libgstreamer-plugins-base0.10-dev
+gstreamer0.10-plugins-good
+gstreamer0.10-plugins-bad
+gstreamer0.10-plugins-ugly
+
+libgstreamer-plugins-base1.0-dev
+gstreamer1.0-plugins-good
+gstreamer1.0-plugins-bad
+gstreamer1.0-plugins-ugly
+
+*** Building ***
+
+Edit the Makefile to set GTK_MAJOR_VERSION to 2 or 3, and GST_VERSION
+to 1.0 or 0.10. GStreamer 1.0 is recommended (faster).
+
+Running "make" should work.
+
+*** Running ***
+
+Run with --options for command line options. However, gstplay also has an
+interactive mode with configurable settings.
+
+*** Issues ***
+
+- When using the xvimagesink the video area is not properly updated after
+  an occluding window is removed.
+
+- When going fullscreen with GTK+ 3 an ugly transition with a white area is
+  visible (should at least be black).
+
+- Configuration cannot be saved.
+
+- No color space control yet.
