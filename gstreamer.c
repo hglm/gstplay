@@ -27,6 +27,11 @@
 #else
 #include <gst/interfaces/xoverlay.h>
 #endif
+#if GST_CHECK_VERSION(1, 0, 0)
+#include <gst/video/colorbalance.h>
+#else
+#include <gst/interfaces/colorbalance.h>
+#endif
 #include <glib.h>
 #include "gstplay.h"
 
@@ -82,13 +87,16 @@ static GstElement *playbin_pipeline;
 static GstElement *pipeline;
 static guint bus_watch_id;
 static gboolean bus_quit_on_playing = FALSE;
+static gboolean set_default_settings_on_playing = FALSE;
 static GList *created_pads_list = NULL;
 static const char *pipeline_description = "";
 static GstState suspended_state;
 static GstClockTime suspended_pos;
 static GstClockTime requested_position;
+static gdouble suspended_audio_volume;
 static gboolean end_of_stream = FALSE;
 static gboolean using_playbin;
+static GList *inform_pipeline_destroyed_cb_list;
 
 void gstreamer_expose_video_overlay() {
 	if (video_window_overlay == NULL)
@@ -109,13 +117,15 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
 		gchar  *debug;
 		GError *error;
 
-		gst_message_parse_error (msg, &error, &debug);
-		g_free (debug);
+		gst_message_parse_error(msg, &error, &debug);
+		g_free(debug);
 
-		g_printerr ("Error: %s\n", error->message);
+		gstreamer_destroy_pipeline();
+
+		gui_show_error_message(
+			"Processing error (unrecognized format or other error).",
+			error->message);
 		g_error_free (error);
-
-		g_main_loop_quit (loop);
 		break;
 		}
 	case GST_MESSAGE_STATE_CHANGED:
@@ -124,6 +134,11 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
 			// stop immediately when play starts.
 			if (GST_STATE(playbin_pipeline) == GST_STATE_PLAYING)
 				g_main_loop_quit(loop);
+		}
+		if (set_default_settings_on_playing &&
+		GST_STATE(pipeline) == GST_STATE_PLAYING) {
+			gstreamer_set_default_settings();
+			set_default_settings_on_playing = FALSE;
 		}
 		break;
 	case GST_MESSAGE_BUFFERING:
@@ -271,9 +286,10 @@ int *pixel_aspect_ratio_denomp) {
 	while (list != NULL) {
 		GstPad *pad = list->data;
 		GstCaps *caps = gst_pad_get_current_caps(pad);
-		read_video_props(caps, formatp, widthp, heightp, framerate_numeratorp,
-			framerate_denomp, pixel_aspect_ratio_nump,
-			pixel_aspect_ratio_denomp);
+		if (GST_IS_CAPS(caps))
+			read_video_props(caps, formatp, widthp, heightp, framerate_numeratorp,
+				framerate_denomp, pixel_aspect_ratio_nump,
+				pixel_aspect_ratio_denomp);
 		list = g_list_next(list);
 	}
 }
@@ -290,9 +306,10 @@ extern void gstreamer_get_video_dimensions(int *widthp, int *heightp) {
 	while (list != NULL) {
 		GstPad *pad = list->data;
 		GstCaps *caps = gst_pad_get_current_caps(pad);
-		read_video_props(caps, &format, widthp, heightp, &framerate_numerator,
-			&framerate_denom, &pixel_aspect_ratio_num,
-			&pixel_aspect_ratio_denom);
+		if (GST_IS_CAPS(caps))
+			read_video_props(caps, &format, widthp, heightp, &framerate_numerator,
+				&framerate_denom, &pixel_aspect_ratio_num,
+				&pixel_aspect_ratio_denom);
 		list = g_list_next(list);
 	}
 }
@@ -319,13 +336,13 @@ void for_each_pipeline_element(gpointer value_data, gpointer data) {
 	g_signal_connect(element, "pad-added", G_CALLBACK(new_pad_cb), NULL);
 }
 
-void gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState state) {
+gboolean gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState state) {
 	GError *error = NULL;
 	pipeline = gst_parse_launch(s, &error);
 	if (!pipeline) {
 		printf("Error: Could not create gstreamer pipeline.\n");
 		printf("Parse error: %s\n", error->message);
-		exit(1);
+		return FALSE;
 	}
 
 	bus_quit_on_playing = FALSE;
@@ -351,6 +368,8 @@ void gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState state) 
 
 	gst_element_set_state(pipeline, GST_STATE_READY);
 
+	set_default_settings_on_playing = TRUE;
+
 	if (state == STARTUP_PLAYING)
 		gst_element_set_state(pipeline, GST_STATE_PLAYING);
 	else
@@ -358,6 +377,9 @@ void gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState state) 
 
 	pipeline_description = s;
 	end_of_stream = FALSE;
+
+	inform_pipeline_destroyed_cb_list = NULL;
+	return TRUE;
 }
 
 void gstreamer_destroy_pipeline() {
@@ -365,6 +387,27 @@ void gstreamer_destroy_pipeline() {
 
 	g_source_remove(bus_watch_id);
 	gst_object_unref(GST_OBJECT(pipeline));
+	pipeline_description = "";
+
+	GList *list = g_list_first(inform_pipeline_destroyed_cb_list);
+	GValue value = G_VALUE_INIT;
+	g_value_init(&value, G_TYPE_POINTER);
+	g_value_set_pointer(&value, NULL);
+	while (list != NULL) {
+		GClosure *closure = list->data;
+		g_closure_invoke(closure, NULL, 1, &value, NULL);
+		g_closure_unref(closure);
+		list = g_list_next(list);
+	}
+	g_value_unset(&value);
+	g_list_free(inform_pipeline_destroyed_cb_list);
+}
+
+void gstreamer_add_pipeline_destroyed_cb(GCallback cb_func, gpointer user_data) {
+	GClosure *closure = g_cclosure_new(cb_func, user_data, NULL);
+	g_closure_set_marshal(closure, g_cclosure_marshal_VOID__VOID);
+	inform_pipeline_destroyed_cb_list = g_list_append(inform_pipeline_destroyed_cb_list,
+		closure);
 }
 
 void gstreamer_play() {
@@ -444,6 +487,7 @@ const gchar *gstreamer_get_duration_str() {
 
 static gboolean seek_to_time_cb(gpointer data) {
 	gstreamer_seek_to_time(requested_position);
+	gstreamer_set_volume(suspended_audio_volume);
 	return FALSE;
 }
 
@@ -463,6 +507,16 @@ gboolean gstreamer_no_pipeline() {
 	return strlen(pipeline_description) == 0;
 }
 
+gboolean gstreamer_no_video() {
+	if (gstreamer_no_pipeline())
+		return TRUE;
+	int width, height;
+	gstreamer_get_video_dimensions(&width, &height);
+	if (width == 0 || height == 0)
+		return TRUE;
+	return FALSE;
+}
+
 void gstreamer_suspend_pipeline() {
 	if (gstreamer_no_pipeline()) {
 		suspended_state = GST_STATE_NULL;
@@ -471,6 +525,7 @@ void gstreamer_suspend_pipeline() {
 	/* Save the current position and wind down the pipeline. */
 	suspended_pos = gstreamer_get_position(NULL);
 	suspended_state = gstreamer_get_state();
+	suspended_audio_volume = gstreamer_get_volume();
 	gstreamer_pause();
 	gstreamer_destroy_pipeline();
 }
@@ -504,7 +559,6 @@ gdouble gstreamer_get_volume() {
 	}
 	gdouble volume;
 	g_object_get(G_OBJECT(pipeline), "volume", &volume, NULL);
-	printf("Volume = %lf\n", volume); fflush(stdout);
 	return volume;
 }
 
@@ -533,4 +587,72 @@ void gstreamer_get_compiled_version(guint *major, guint *minor, guint *micro) {
 	*major = GST_VERSION_MAJOR;
 	*minor = GST_VERSION_MINOR;
 	*micro = GST_VERSION_MICRO;
+}
+
+static GstColorBalanceChannel *color_balance_channel[4];
+static gint last_value_set[4];
+
+int gstreamer_prepare_color_balance() {
+	if (!GST_IS_COLOR_BALANCE(pipeline))
+		return 0;
+	for (int i = 0; i < 4; i++)
+		color_balance_channel[i] = NULL;
+	GList *channel_list = gst_color_balance_list_channels(
+		GST_COLOR_BALANCE(pipeline));
+	channel_list = g_list_first(channel_list);
+	while (channel_list) {
+		GstColorBalanceChannel *channel = channel_list->data;
+		if (strcmp(channel->label, "BRIGHTNESS") == 0)
+			color_balance_channel[CHANNEL_BRIGHTNESS] = channel;
+		else if (strcmp(channel->label, "CONTRAST") == 0)
+			color_balance_channel[CHANNEL_CONTRAST] = channel;
+		else if (strcmp(channel->label, "HUE") == 0)
+			color_balance_channel[CHANNEL_HUE] = channel;
+		else if (strcmp(channel->label, "SATURATION") == 0)
+			color_balance_channel[CHANNEL_SATURATION] = channel;
+		channel_list = g_list_next(channel_list);
+	}
+	int r;
+	for (int i = 0; i < 4; i++) {
+		if (color_balance_channel[i] != NULL) {
+			r |= 1 << i;
+			last_value_set[i] = gst_color_balance_get_value(
+				GST_COLOR_BALANCE(pipeline), color_balance_channel[i]);
+		}
+	}
+	return r;
+}
+
+void gstreamer_set_color_balance(int channel, gdouble value) {
+	if (color_balance_channel[channel] == NULL)
+		return;
+	gint v = color_balance_channel[channel]->min_value
+		+ value * 0.01 * (color_balance_channel[channel]->max_value -
+		color_balance_channel[channel]->min_value);
+	if (v != last_value_set[channel]) {
+		gst_color_balance_set_value(GST_COLOR_BALANCE(pipeline),
+			color_balance_channel[channel], v);
+		last_value_set[channel] = v;
+	}
+}
+
+gdouble gstreamer_get_color_balance(int channel) {
+	if (color_balance_channel[channel] == NULL) {
+		printf("gstplay: Could not read color balance channel.\n");
+		return - 1.0;
+	}
+	gdouble v = gst_color_balance_get_value(GST_COLOR_BALANCE(pipeline),
+		color_balance_channel[channel]);
+	// Normalize to [0, 100].
+	return (v - color_balance_channel[channel]->min_value) * 100.0 /
+		(color_balance_channel[channel]->max_value -
+		color_balance_channel[channel]->min_value);
+}
+
+void gstreamer_set_default_settings() {
+	if (!config_software_color_balance())
+		return;
+	gstreamer_prepare_color_balance();
+	for (int i = 0; i < 4; i++)
+		gstreamer_set_color_balance(i, config_get_global_color_balance_default(i));
 }

@@ -20,6 +20,11 @@
 
 typedef enum { STARTUP_PLAYING, STARTUP_PAUSED } StartupState;
 
+#define CHANNEL_BRIGHTNESS 0
+#define CHANNEL_CONTRAST 1
+#define CHANNEL_HUE 2
+#define CHANNEL_SATURATION 3
+
 /* main.c */
 
 extern const char *main_create_pipeline(const char *uri, const char *video_title_filename);
@@ -53,6 +58,10 @@ extern void config_set_software_volume(gboolean status);
 extern gboolean config_software_volume();
 extern void config_set_software_color_balance(gboolean status);
 extern gboolean config_software_color_balance();
+extern void config_set_global_color_balance_default(int channel, gdouble value);
+extern gdouble config_get_global_color_balance_default(int channel);
+extern void config_set_uri_color_balance_default(int channel, gdouble value);
+extern gdouble config_get_uri_color_balance_default(int channel);
 
 /* gui.c */
 
@@ -61,6 +70,7 @@ extern void gui_setup_window(GMainLoop *loop, const char *video_filename, int vi
 	int video_height, gboolean full_screen);
 extern guintptr gui_get_video_window_handle();
 extern void gui_get_version(guint *major, guint *minor, guint *micro);
+extern void gui_show_error_message(gchar *message, char *detail);
 
 /* gstreamer.c */
 
@@ -70,7 +80,7 @@ extern void gstreamer_get_compiled_version(guint *major, guint *minor, guint *mi
 extern gboolean gstreamer_have_software_color_balance();
 extern void gstreamer_determine_video_dimensions(const char *uri, int *video_width, int *video_height);
 extern void gstreamer_expose_video_overlay();
-extern void gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState startup);
+extern gboolean gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState startup);
 extern void gstreamer_destroy_pipeline();
 extern void gstreamer_get_video_dimensions(int *width, int *height);
 extern void gstreamer_get_video_info(const char **format, int *width, int *height,
@@ -85,6 +95,7 @@ extern gint64 gstreamer_get_duration();
 extern const char *gstreamer_get_duration_str();
 extern gboolean gstreamer_end_of_stream();
 extern gboolean gstreamer_no_pipeline();
+extern gboolean gstreamer_no_video();
 /* Save the position of the video stream and wind down the pipeline. */
 extern void gstreamer_suspend_pipeline();
 /* Reconstruct the last-run pipeline and seek to the saved position. */
@@ -92,3 +103,8 @@ extern void gstreamer_restart_pipeline();
 extern void gstreamer_set_volume(gdouble volume);
 extern gdouble gstreamer_get_volume();
 extern void gstreamer_inform_playbin_used(gboolean status);
+extern int gstreamer_prepare_color_balance();
+extern void gstreamer_set_color_balance(int channel, gdouble value);
+extern gdouble gstreamer_get_color_balance(int channel);
+extern void gstreamer_add_pipeline_destroyed_cb(GCallback cb_func, gpointer user_data);
+extern void gstreamer_set_default_settings();

@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <glib.h>
+#include <glib-object.h>
 #include "gstplay.h"
 
 #define MAX_VIDEO_SINKS 10
@@ -39,6 +40,7 @@ static gboolean video_only;
 static gboolean quit_on_stream_end;
 static gboolean software_volume;
 static gboolean software_color_balance;
+static gdouble global_color_balance_defaults[4];
 
 void config_init() {
 	/* Initialize with defaults. */
@@ -61,6 +63,8 @@ void config_init() {
 	quit_on_stream_end = FALSE;
 	software_volume = TRUE;
 	software_color_balance = TRUE;
+	for (int i = 0; i < 4; i++)
+		global_color_balance_defaults[i] = 50.0;
 }
 
 StartupState config_get_startup_preference() {
@@ -173,4 +177,18 @@ void config_set_software_color_balance(gboolean status) {
 
 gboolean config_software_color_balance() {
 	return software_color_balance;
+}
+
+void config_set_global_color_balance_default(int channel, gdouble value) {
+	global_color_balance_defaults[channel] = value;
+}
+
+gdouble config_get_global_color_balance_default(int channel) {
+	return global_color_balance_defaults[channel];
+}
+
+void config_set_uri_color_balance_default(int channel, gdouble value) {
+}
+
+gdouble config_get_uri_color_balance_default(int channel) {
 }

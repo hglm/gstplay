@@ -59,6 +59,7 @@ interactive mode with configurable settings.
 - When going fullscreen with GTK+ 3 an ugly transition with a white area is
   visible (should at least be black).
 
-- Configuration cannot be saved.
+- Configuration cannot be saved yet.
 
-- No color space control yet.
+- Error handling could use improvment.
+

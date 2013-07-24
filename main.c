@@ -364,11 +364,14 @@ int main(int argc, char *argv[]) {
 		printf("gstplay: pipeline: %s\n", s);
 	printf("gstplay: Playing %s\n", video_title_filename);
 
-	gstreamer_run_pipeline(loop, s, config_get_startup_preference());
+	if (!gstreamer_run_pipeline(loop, s, config_get_startup_preference())) {
+		gui_show_error_message("Pipeline parse problem.", "");
+	}
 
 	g_main_loop_run(loop);
 
-	gstreamer_destroy_pipeline();
+	if (!gstreamer_no_pipeline())
+		gstreamer_destroy_pipeline();
 
 	g_main_loop_unref(loop);
 

@@ -70,12 +70,13 @@ static void video_window_realize_cb (GtkWidget * widget, gpointer data) {
 #if GTK_CHECK_VERSION(3, 0, 0)
 
 static gboolean video_window_draw_cb(GtkWidget *widget, cairo_t *cr, gpointer data) {
-	if (gstreamer_no_pipeline()) {
+	if (gstreamer_no_video()) {
+		cairo_reset_clip(cr);
 		cairo_set_source_rgb(cr, 0, 0, 0);
 		cairo_paint(cr);
 		return TRUE;
 	}
-	printf("gstplay: exposing video overlay.\n");
+//	printf("gstplay: exposing video overlay.\n");
 	gstreamer_expose_video_overlay();
 	return TRUE;
 }
@@ -84,8 +85,9 @@ static gboolean video_window_draw_cb(GtkWidget *widget, cairo_t *cr, gpointer da
 
 static gboolean video_window_expose_event_cb(GtkWidget *widget, GdkEventExpose *event,
 gpointer data) {
-	if (gstreamer_no_pipeline()) {
+	if (gstreamer_no_video()) {
 		cairo_t *cr = gdk_cairo_create(gtk_widget_get_window(widget));
+		cairo_reset_clip(cr);
 		cairo_set_source_rgb(cr, 0, 0, 0);
 		cairo_paint(cr);
 		cairo_destroy(cr);
@@ -194,6 +196,19 @@ static void destroy_cb(GtkWidget *widget, gpointer data) {
 	g_main_loop_quit(loop);
 }
 
+void gui_show_error_message(gchar *message, gchar *message_detail) {
+	char *s = malloc(strlen(message) + strlen(message_detail) + 128);
+	sprintf(s, "%s\n\nDetailed error message:\n%s", message, message_detail);
+	GtkWidget *message_dialog = gtk_message_dialog_new(GTK_WINDOW(window),
+		GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+		GTK_MESSAGE_ERROR,
+		GTK_BUTTONS_OK,
+		s);
+	gtk_dialog_run(GTK_DIALOG(message_dialog));
+	gtk_widget_destroy(message_dialog);
+	free(s);
+}
+
 static void menu_item_properties_activate_cb(GtkMenuItem *menu_item, gpointer data) {
 	char message[1024];
 	int width = 0;
@@ -260,7 +275,6 @@ skip_stream_info: ;
 }
 
 static void menu_item_open_file_activate_cb(GtkMenuItem *menu_item, gpointer data) {
-again : ;
 	int r = gtk_dialog_run(GTK_DIALOG(open_file_dialog));
 	if (r == GTK_RESPONSE_ACCEPT) {
 		char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(
@@ -274,8 +288,12 @@ again : ;
 		main_create_uri(filename, &uri, &video_title_filename);
 		g_free(filename);
 		const char *pipeline_str = main_create_pipeline(uri, video_title_filename);
-		gstreamer_run_pipeline(main_get_main_loop(), pipeline_str,
-			config_get_startup_preference());
+		gtk_widget_hide(open_file_dialog);
+		if (!gstreamer_run_pipeline(main_get_main_loop(), pipeline_str,
+		config_get_startup_preference())) {
+			gui_show_error_message("Pipeline parse problem.", "");
+		}
+		return;
 	}
 	gtk_widget_hide(open_file_dialog);
 }
@@ -325,8 +343,18 @@ static void menu_item_preferences_activate_cb(GtkMenuItem *menu_item, GtkWidget 
 	gtk_widget_hide(GTK_WIDGET(dialog));
 }
 
+static void menu_item_close_activate_cb(GtkMenuItem *menu_item, gpointer data) {
+	if (!gstreamer_no_pipeline()) {
+		gstreamer_pause();
+		gstreamer_destroy_pipeline();
+	}
+}
+
 static void menu_item_quit_activate_cb(GtkMenuItem *menu_item, gpointer data) {
+	if (!gstreamer_no_pipeline())
+		gstreamer_destroy_pipeline();
 	g_main_loop_quit((GMainLoop *)data);
+	exit(0);
 }
 
 static void menu_item_play_activate_cb(GtkMenuItem *menu_item, gpointer data) {
@@ -416,6 +444,8 @@ static void set_audio_volume(double volume) {
 }
 
 static void increase_audio_volume(double delta) {
+	if (gstreamer_no_pipeline())
+		return;
 	gdouble vol = gstreamer_get_volume();
 	vol += delta;
 	if (vol > 1.0)
@@ -424,6 +454,8 @@ static void increase_audio_volume(double delta) {
 }
 
 static void decrease_audio_volume(double delta) {
+	if (gstreamer_no_pipeline())
+		return;
 	gdouble vol = gstreamer_get_volume();
 	vol -= delta;
 	if (vol < 0)
@@ -433,6 +465,8 @@ static void decrease_audio_volume(double delta) {
 
 static void check_menu_item_mute_activate_cb(GtkCheckMenuItem *check_menu_item,
 gpointer data) {
+	if (gstreamer_no_pipeline())
+		return;
 	if (gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(check_menu_item)))
 		set_audio_volume(0);
 	else
@@ -507,6 +541,119 @@ static void menu_item_decrease_volume_activate_cb(GtkMenuItem *menu_item, gpoint
 	decrease_audio_volume(0.05);
 }
 
+#if GTK_CHECK_VERSION(3, 0, 0)
+
+GtkWidget *color_slider_label[4];
+GtkWidget *color_slider[4];
+static gboolean color_controls_active = FALSE;
+
+void color_balance_pipeline_destroyed_cb(gpointer data, GtkDialog *dialog) {
+	gtk_widget_hide(GTK_WIDGET(dialog));
+	color_controls_active = FALSE;
+}
+
+static void menu_item_color_controls_activate_cb(GtkMenuItem *menu_item, GtkDialog *dialog) {
+	if (color_controls_active)
+		return;
+	if (!config_software_color_balance()) {
+		GtkWidget *message_dialog = gtk_message_dialog_new(GTK_WINDOW(window),
+			GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+			GTK_MESSAGE_INFO,
+			GTK_BUTTONS_OK,
+			"Software color balance disabled in settings.");
+		gtk_dialog_run(GTK_DIALOG(message_dialog));
+		gtk_widget_destroy(message_dialog);
+		return;
+	}
+	int r = 0;
+	if (!gstreamer_no_pipeline())
+		r = gstreamer_prepare_color_balance();
+	if (r == 0) {
+		GtkWidget *message_dialog = gtk_message_dialog_new(GTK_WINDOW(window),
+			GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+			GTK_MESSAGE_INFO,
+			GTK_BUTTONS_OK,
+			"Software color balance not available with current stream\n"
+			"or newer version of GStreamer required.\n"
+			);
+		gtk_dialog_run(GTK_DIALOG(message_dialog));
+		gtk_widget_destroy(message_dialog);
+		return;
+	}
+	for (int i = 0; i < 4; i++) {
+		gboolean status;
+		if (r & (1 << i))
+			status = TRUE;
+		else
+			status = FALSE;
+		if (status) {
+			gdouble value;
+			// Get default value from config
+			value = config_get_global_color_balance_default(i);
+			// Read default from gstreamer (disabled).
+//			value = gstreamer_get_color_balance(i));
+			gtk_range_set_value(GTK_RANGE(color_slider[i]), value);
+		}
+		gtk_widget_set_visible(color_slider[i], status);
+		gtk_widget_set_visible(color_slider_label[i], status);
+	}
+	gtk_widget_show_all(GTK_WIDGET(dialog));
+	color_controls_active = TRUE;
+
+	gstreamer_add_pipeline_destroyed_cb(color_balance_pipeline_destroyed_cb, dialog);
+}
+
+static void color_slider_value_changed_cb(GtkScale *scale, GtkLabel *label) {
+	const gchar *str = gtk_label_get_text(label);
+	switch (str[0]) {
+	case 'B':
+		gstreamer_set_color_balance(CHANNEL_BRIGHTNESS, gtk_range_get_value(
+			GTK_RANGE(scale)));
+		break;
+	case 'C':
+		gstreamer_set_color_balance(CHANNEL_CONTRAST, gtk_range_get_value(
+			GTK_RANGE(scale)));
+		break;
+	case 'H':
+		gstreamer_set_color_balance(CHANNEL_HUE, gtk_range_get_value(
+			GTK_RANGE(scale)));
+		break;
+	case 'S':
+		gstreamer_set_color_balance(CHANNEL_SATURATION, gtk_range_get_value(
+			GTK_RANGE(scale)));
+		break;
+	}
+}
+
+static void color_balance_set_defaults_button_clicked_cb(GtkButton *button, gpointer data) {
+	for (int i = 0; i < 4; i++) {
+		gtk_range_set_value(GTK_RANGE(color_slider[i]), 50.0);
+	}
+}
+
+static void color_balance_set_global_defaults_button_clicked_cb(GtkButton *button,
+gpointer data) {
+	for (int i = 0; i < 4; i++)
+		if (gtk_widget_is_visible(color_slider[i]))
+			config_set_global_color_balance_default(i,
+				gtk_range_get_value(GTK_RANGE(color_slider[i])));
+}
+
+static void color_balance_set_uri_defaults_button_clicked_cb(GtkButton *button,
+gpointer data) {
+	for (int i = 0; i < 4; i++)
+		if (gtk_widget_is_visible(color_slider[i]))
+			config_set_uri_color_balance_default(i,
+				gtk_range_get_value(GTK_RANGE(color_slider[i])));
+}
+
+void color_balance_dialog_response_cb(GtkDialog *dialog, gpointer data) {
+	gtk_widget_hide(GTK_WIDGET(dialog));
+	color_controls_active = FALSE;
+}
+
+#endif
+
 static void menu_item_about_activate_cb(GtkMenuItem *menu_item, gpointer data) {
 	guint gst_major, gst_minor, gst_micro;
 	gstreamer_get_version(&gst_major, &gst_minor, &gst_micro);
@@ -545,22 +692,22 @@ static GtkWidget *create_preferences_dialog() {
 
 	// Video and audio output sinks.
 	GtkWidget *label = gtk_label_new("Video output:");
-	int n = config_get_number_of_video_sinks();
-	video_output_radio_button = malloc(sizeof(GtkRadioButton *) * n);
+	int nu_video_sinks = config_get_number_of_video_sinks();
+	video_output_radio_button = malloc(sizeof(GtkRadioButton *) * nu_video_sinks);
 	video_output_radio_button[0] = gtk_radio_button_new_with_label(NULL,
 		config_get_video_sink_by_index(0));
-	for (int i = 1; i < n; i++)
+	for (int i = 1; i < nu_video_sinks; i++)
 		video_output_radio_button[i] = gtk_radio_button_new_with_label(
 			gtk_radio_button_get_group(GTK_RADIO_BUTTON(
 			video_output_radio_button[0])), config_get_video_sink_by_index(i));
 	gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(video_output_radio_button[
 		config_get_current_video_sink_index()]), TRUE);
 	GtkWidget *label2 = gtk_label_new("Audio output:");
-	n = config_get_number_of_audio_sinks();
-	audio_output_radio_button = malloc(sizeof(GtkRadioButton *) * n);
+	int nu_audio_sinks = config_get_number_of_audio_sinks();
+	audio_output_radio_button = malloc(sizeof(GtkRadioButton *) * nu_audio_sinks);
 	audio_output_radio_button[0] = gtk_radio_button_new_with_label(NULL,
 		config_get_audio_sink_by_index(0));
-	for (int i = 1; i < n; i++)
+	for (int i = 1; i < nu_audio_sinks; i++)
 		audio_output_radio_button[i] = gtk_radio_button_new_with_label(
 			gtk_radio_button_get_group(GTK_RADIO_BUTTON(
 			audio_output_radio_button[0])), config_get_audio_sink_by_index(i));
@@ -578,7 +725,7 @@ static GtkWidget *create_preferences_dialog() {
 	GtkWidget *vbox1 = gtk_vbox_new(FALSE, 0);
 #endif
 	gtk_container_add(GTK_CONTAINER(vbox1), label);
-	for (int i = 0; i < 4; i++)
+	for (int i = 0; i < nu_video_sinks; i++)
 		gtk_container_add(GTK_CONTAINER(vbox1), video_output_radio_button[i]);
 	gtk_container_add(GTK_CONTAINER(hbox), vbox1);
 #if GTK_CHECK_VERSION(3, 0, 0)
@@ -587,7 +734,7 @@ static GtkWidget *create_preferences_dialog() {
 	GtkWidget *vbox2 = gtk_vbox_new(FALSE, 0);
 #endif
 	gtk_container_add(GTK_CONTAINER(vbox2), label2);
-	for (int i = 0; i < 4; i++)
+	for (int i = 0; i < nu_audio_sinks; i++)
 		gtk_container_add(GTK_CONTAINER(vbox2), audio_output_radio_button[i]);
 	gtk_container_add(GTK_CONTAINER(hbox), vbox2);
 
@@ -613,8 +760,65 @@ static GtkWidget *create_preferences_dialog() {
 	return dialog;
 }
 
+#if GTK_CHECK_VERSION(3, 0, 0)
+
+static GtkWidget *create_color_balance_dialog() {
+	GtkWidget *dialog = gtk_dialog_new_with_buttons(
+		"Color balance",
+		GTK_WINDOW(window), GTK_DIALOG_DESTROY_WITH_PARENT,
+		GTK_STOCK_OK, GTK_RESPONSE_ACCEPT,
+		NULL);
+	gtk_window_set_default_size(GTK_WINDOW(dialog), 480, - 1);
+	GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+
+	color_slider_label[0] = gtk_label_new("Brightness");
+	color_slider_label[1] = gtk_label_new("Contrast");
+	color_slider_label[2] = gtk_label_new("Hue");
+	color_slider_label[3] = gtk_label_new("Saturation");
+	GtkWidget *grid = gtk_grid_new();
+	for (int i = 0; i < 4; i++) {
+		color_slider[i] = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0,
+			100.0, 10.0);
+		gtk_scale_set_value_pos(GTK_SCALE(color_slider[i]), GTK_POS_RIGHT);
+		gtk_scale_set_digits(GTK_SCALE(color_slider[i]), 0);
+		gtk_range_set_value(GTK_RANGE(color_slider[i]), 50.0);
+		gtk_widget_set_hexpand(color_slider[i], TRUE);
+		g_signal_connect(G_OBJECT(color_slider[i]), "value-changed", G_CALLBACK(
+			color_slider_value_changed_cb), color_slider_label[i]);
+		gtk_grid_attach(GTK_GRID(grid), color_slider_label[i], 0, i, 1, 1);
+		gtk_grid_attach(GTK_GRID(grid), color_slider[i], 1, i, 1, 1);
+	}
+	gtk_container_add(GTK_CONTAINER(content), grid);
+	GtkWidget *color_balance_set_global_defaults_button = gtk_button_new_with_label(
+		"Set as global default color settings");
+	g_signal_connect(G_OBJECT(color_balance_set_global_defaults_button), "clicked",
+		G_CALLBACK(color_balance_set_global_defaults_button_clicked_cb), NULL);
+	GtkWidget *color_balance_set_uri_defaults_button = gtk_button_new_with_label(
+		"Set as default color settings for this uri");
+	g_signal_connect(G_OBJECT(color_balance_set_uri_defaults_button), "clicked",
+		G_CALLBACK(color_balance_set_uri_defaults_button_clicked_cb), NULL);
+	gtk_container_add(GTK_CONTAINER(content), color_balance_set_global_defaults_button);
+	gtk_container_add(GTK_CONTAINER(content), color_balance_set_uri_defaults_button);
+
+	GtkWidget *action_area = gtk_dialog_get_action_area(GTK_DIALOG(dialog));
+	GtkWidget *set_defaults_button = gtk_button_new_with_label("Set defaults");
+	g_signal_connect(G_OBJECT(set_defaults_button), "clicked", G_CALLBACK(
+		color_balance_set_defaults_button_clicked_cb), NULL);
+	gtk_container_add(GTK_CONTAINER(action_area), set_defaults_button);
+	g_signal_connect(dialog, "response", G_CALLBACK(color_balance_dialog_response_cb),
+		dialog);
+	return dialog;
+}
+
+#endif
+
 static void create_menus(GMainLoop *loop) {
 	GtkWidget *preferences_dialog = create_preferences_dialog();
+
+#if GTK_CHECK_VERSION(3, 0, 0)
+	// Create the color balance dialog
+	GtkWidget *color_balance_dialog = create_color_balance_dialog();
+#endif
 
 	// Create the menu bar.
 	menu_bar = gtk_menu_bar_new();
@@ -629,6 +833,9 @@ static void create_menus(GMainLoop *loop) {
 	GtkWidget *menu_item_preferences = gtk_menu_item_new_with_label("Preferences");
 	g_signal_connect(G_OBJECT(menu_item_preferences), "activate",
 		G_CALLBACK(menu_item_preferences_activate_cb), preferences_dialog);
+	GtkWidget *menu_item_close = gtk_menu_item_new_with_label("Close stream");
+	g_signal_connect(G_OBJECT(menu_item_close), "activate",
+		G_CALLBACK(menu_item_close_activate_cb), loop);
 	GtkWidget *menu_item_quit = gtk_menu_item_new_with_label("Quit");
 	g_signal_connect(G_OBJECT(menu_item_quit), "activate",
 		G_CALLBACK(menu_item_quit_activate_cb), loop);
@@ -636,6 +843,7 @@ static void create_menus(GMainLoop *loop) {
 	gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), menu_item_open_file);
 	gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), menu_item_properties);
 	gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), menu_item_preferences);
+	gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), menu_item_close);
 	gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), menu_item_quit);
 	// Create the File menu.
 	GtkWidget *file_item = gtk_menu_item_new_with_label("File");
@@ -671,7 +879,7 @@ static void create_menus(GMainLoop *loop) {
 	g_signal_connect(G_OBJECT(menu_item_increase_volume), "activate",
 		G_CALLBACK(menu_item_increase_volume_activate_cb), loop);
 	GtkWidget *menu_item_decrease_volume = gtk_menu_item_new_with_label(
-		"Decrease volume (+)");
+		"Decrease volume (-)");
 	g_signal_connect(G_OBJECT(menu_item_decrease_volume), "activate",
 		G_CALLBACK(menu_item_decrease_volume_activate_cb), loop);
 	check_menu_item_mute = gtk_check_menu_item_new_with_label("Mute (M)");
@@ -716,6 +924,18 @@ static void create_menus(GMainLoop *loop) {
 	GtkWidget *view_item = gtk_menu_item_new_with_label("View");
 	gtk_menu_item_set_submenu(GTK_MENU_ITEM(view_item), view_menu);
 	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), view_item);
+
+#if GTK_CHECK_VERSION(3, 0, 0)
+	GtkWidget *menu_item_color_controls = gtk_menu_item_new_with_label("Open color controls");
+	g_signal_connect(G_OBJECT(menu_item_color_controls), "activate",
+		G_CALLBACK(menu_item_color_controls_activate_cb), color_balance_dialog);
+	GtkWidget *color_menu = gtk_menu_new();
+	gtk_menu_shell_append(GTK_MENU_SHELL(color_menu), menu_item_color_controls);
+	// Create the color menu.
+	GtkWidget *color_item = gtk_menu_item_new_with_label("Color");
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(color_item), color_menu);
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), color_item);
+#endif
 
 	GtkWidget *menu_item_about = gtk_menu_item_new_with_label("About");
 	g_signal_connect(G_OBJECT(menu_item_about), "activate",
