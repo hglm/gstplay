@@ -2,7 +2,7 @@
     gstplay -- Simple gstreamer-based media player
 
     Copyright 2013 Harm Hanemaaijer <fgenfb@yahoo.com>
- 
+
     gstplay is free software: you can redistribute it and/or modify it
     under the terms of the GNU Lesser General Public License as published
     by the Free Software Foundation, either version 3 of the License, or
@@ -18,12 +18,13 @@
 
 */
 
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <glib.h>
+#include <glib-unix.h>
+#include <sys/wait.h>
 #include <gst/gst.h>
 #include "gstplay.h"
 
@@ -61,6 +62,7 @@ static gboolean full_screen = FALSE;
 static int decode_path = DECODE_PATH_PLAYBIN;
 static gboolean preload_file = FALSE;
 static gboolean verbose = FALSE;
+static gboolean console_mode = FALSE;
 static int width = 0;		// Requested width and height (0 = use video dimension).
 static int height = 0;
 
@@ -69,9 +71,9 @@ static const char *current_uri;
 static const char *current_video_title_filename;
 
 static void usage(int argc, char *argv[]) {
-	printf("gstplay -- simple media player using gstreamer 1.0\n"
+	printf("gstplay -- simple media player using gstreamer 1.0 or 0.10\n"
 		"Usage:\n"
-		"    gstplay <options> <filename>\n"
+		"    gstplay <options> <filename or uri>\n"
 		"Options:\n"
 		"    --help, --options This help message.\n"
 		"    --width <n>       Set width of the output window.\n"
@@ -81,12 +83,19 @@ static void usage(int argc, char *argv[]) {
 		"    --decodebin       Use decodebin instead of playbin.\n"
 		"    --preload         Read the entire file into the buffer cache before\n"
 		"                      playing.\n"
-		"    --videosink <snk> Select to video output sink to use (for example\n"
+		"    --videosink <snk> Select the video output sink to use (for example\n"
 		"                      xvimagesink or ximagesink). Default autovideosink.\n"
-		"    --audiosink <snk> Select to audio output sink to use (for example\n"
+		"    --audiosink <snk> Select the audio output sink to use (for example\n"
 		"                      alsasink or jackaudiosink). Default autoaudiosink.\n"
 		"    --verbose         Print messages/info.\n"
 		"    --quit            Quit application when the end of the stream is reached.\n"
+		"    --fbdev2sink      Selects the fbdev2sink video sink in console mode. Use the\n"
+		"                      --videosink option for more flexibility.\n"
+		"    --directfb        Selects the dfbvideosink video sink. Use the --videosink\n"
+		"                      option for more flexibility.\n"
+		"    --nogui           Enables console mode; this makes it possible to use custom\n"
+		"                      sinks (such as a file sink) from an X terminal without\n"
+		"                      opening a video window.\n"
 		"The following three options can be used to replace playbin or decodebin\n"
 		"with a specific decode path, which avoids audio processing completely when\n"
 		"--videoonly is specified.\n"
@@ -116,6 +125,81 @@ static void check_and_preload_file(const char *filename, gboolean preload) {
 	}
 	free(buffer);
 	fclose(f);
+}
+
+/* Signal handling when running in the console. */
+
+extern volatile gboolean glib_on_error_halt;
+
+static void fault_spin(void) {
+	int spinning = TRUE;
+
+	glib_on_error_halt = FALSE;
+	g_on_error_stack_trace("gstplay");
+
+	wait(NULL);
+
+	/* FIXME how do we know if we were run by libtool? */
+	fprintf(stderr,
+		"Spinning.  Please run 'gdb gstplay %d' to "
+		"continue debugging, Ctrl-C to quit, or Ctrl-\\ to dump core.\n",
+		(gint) getpid ());
+	while (spinning)
+		g_usleep (1000000);
+}
+
+static void fault_restore(void)
+{
+	struct sigaction action;
+
+	memset(&action, 0, sizeof (action));
+	action.sa_handler = SIG_DFL;
+
+	sigaction(SIGSEGV, &action, NULL);
+	sigaction(SIGQUIT, &action, NULL);
+}
+
+static void fault_handler_sighandler(int signum) {
+	fault_restore ();
+
+	/* printf is used instead of g_print(), since it's less likely to
+	 * deadlock */
+	switch (signum) {
+	case SIGSEGV :
+		fprintf(stderr, "Caught SIGSEGV\n");
+		break;
+	case SIGQUIT:
+		if (verbose)
+			printf("Caught SIGQUIT\n");
+		break;
+	default:
+		fprintf(stderr, "signo:  %d\n", signum);
+		break;
+	}
+
+	fault_spin ();
+}
+
+static void install_fault_handlers() {
+	struct sigaction action;
+
+	memset(&action, 0, sizeof(action));
+	action.sa_handler = fault_handler_sighandler;
+	sigaction (SIGSEGV, &action, NULL);
+	sigaction (SIGQUIT, &action, NULL);
+}
+
+static gboolean intr_handler(gpointer user_data) {
+	printf("gstplay: Interrupt.\n");
+	fflush(stdout);
+
+	if (!gstreamer_no_pipeline())
+		gstreamer_destroy_pipeline();
+
+	g_main_loop_quit(loop);
+
+	/* Remove signal handler. */
+	return FALSE;
 }
 
 const char *main_create_pipeline(const char *uri, const char *video_title_filename) {
@@ -229,6 +313,22 @@ GMainLoop *main_get_main_loop() {
 	return loop;
 }
 
+gboolean main_have_gui() {
+	return !console_mode;
+}
+
+void main_show_error_message(const char *message, const char *details) {
+	if (main_have_gui())
+		gui_show_error_message(message, details);
+	else {
+		printf("gstplay: error: %s\nDetails:\n%s\n", message, details);
+		const char *description = gstreamer_get_pipeline_description();
+		if (strlen(description) > 0)
+			printf("Pipeline: %s\n", description);
+		g_main_loop_quit(loop);
+	}
+}
+
 int main(int argc, char *argv[]) {
 	int argi = 1;
 
@@ -236,7 +336,8 @@ int main(int argc, char *argv[]) {
 
 	gstreamer_init(&argc, &argv);
 
-	gui_init(&argc, &argv);
+	if (!gui_init(&argc, &argv))
+		console_mode = TRUE;
 
 	/* Process options. */
 	for (;;) {
@@ -320,14 +421,44 @@ int main(int argc, char *argv[]) {
 			argi++;
 			continue;
 		}
+		if (strcasecmp(argv[argi], "--fbdev2sink") == 0) {
+			if (!console_mode) {
+				printf("gstplay: --fbdev2sink is only compatible with console "
+					"(X detected).\n");
+				return 1;
+			}
+			config_set_current_video_sink("fbdev2sink");
+			argi++;
+			continue;
+		}
+		if (strcasecmp(argv[argi], "--directfb") == 0) {
+			if (!console_mode) {
+				printf("gstplay: --directfb is only compatible with console "
+					"(X detected).\n");
+				return 1;
+			}
+			config_set_current_video_sink("dfbvideosink");
+			argi++;
+			continue;
+		}
+		if (strcasecmp(argv[argi], "--nogui") == 0) {
+			console_mode = TRUE;
+			config_set_quit_on_stream_end(TRUE);
+			argi++;
+			continue;
+		}
 		if (argv[argi][0] == '-') {
-			printf("Unknown option %s.\n", argv[argi]);
+			printf("Unknown option %s. Run with --options for a list.\n", argv[argi]);
 			return 1;
 		}
 		break;
 	}
 
 	if (argi >= argc) {
+		if (console_mode) {
+			printf("gstplay: No filename or uri specified.\n");
+			exit(0);
+		}
 		/* Run in interactive mode. */
 		loop = g_main_loop_new(NULL, FALSE);
 		if (width == 0)
@@ -344,34 +475,52 @@ int main(int argc, char *argv[]) {
 	char *video_title_filename;
 	main_create_uri(argv[argi], &uri, &video_title_filename);
 
-	/* Determine the file type and video dimensions. */
+	/* Determine the video dimensions when running in GUI mode. */
 	int video_width, video_height;
-	gstreamer_determine_video_dimensions(uri, &video_width, &video_height);
-	if (verbose)
-		printf("gstplay: Video dimensions %dx%d\n", video_width, video_height);
+	if (main_have_gui()) {
+		gstreamer_determine_video_dimensions(uri, &video_width, &video_height);
+		if (verbose)
+			printf("gstplay: Video dimensions %dx%d\n", video_width, video_height);
+	}
 
 	const char *s = main_create_pipeline(uri, video_title_filename);
 
 	loop = g_main_loop_new(NULL, FALSE);
 
-	if (width == 0)
-		width = video_width;
-	if (height == 0)
-		height = video_height;
-	gui_setup_window(loop, video_title_filename, width, height, full_screen);
+	if (main_have_gui()) {
+		if (width == 0)
+			width = video_width;
+		if (height == 0)
+			height = video_height;
+		gui_setup_window(loop, video_title_filename, width, height, full_screen);
+	}
 
 	if (verbose)
 		printf("gstplay: pipeline: %s\n", s);
 	printf("gstplay: Playing %s\n", video_title_filename);
 
+	/*
+         * Install fault handlers to allow GStreamer to properly shutdown (and restore
+         * text mode) in case on an interrupt or crash when in console mode.
+         */
+	guint signal_watch_id;
+	if (!main_have_gui()) {
+		signal_watch_id =
+			g_unix_signal_add (SIGINT, (GSourceFunc) intr_handler, loop);
+		install_fault_handlers();
+	}
+
 	if (!gstreamer_run_pipeline(loop, s, config_get_startup_preference())) {
-		gui_show_error_message("Pipeline parse problem.", "");
+		main_show_error_message("Pipeline parse problem.", "");
 	}
 
 	g_main_loop_run(loop);
 
 	if (!gstreamer_no_pipeline())
 		gstreamer_destroy_pipeline();
+
+	if (!main_have_gui())
+		g_source_remove(signal_watch_id);
 
 	g_main_loop_unref(loop);
 

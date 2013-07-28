@@ -35,8 +35,8 @@ static gboolean full_screen = FALSE;
 static GtkWidget *menu_bar;
 GtkWidget *open_file_dialog;
 
-void gui_init(int *argcp, char **argvp[]) {
-	gtk_init(argcp, argvp);
+gboolean gui_init(int *argcp, char **argvp[]) {
+	return gtk_init_check(argcp, argvp);
 }
 
 void gui_get_version(guint *major, guint *minor, guint *micro) {
@@ -196,7 +196,7 @@ static void destroy_cb(GtkWidget *widget, gpointer data) {
 	g_main_loop_quit(loop);
 }
 
-void gui_show_error_message(gchar *message, gchar *message_detail) {
+void gui_show_error_message(const gchar *message, const gchar *message_detail) {
 	char *s = malloc(strlen(message) + strlen(message_detail) + 128);
 	sprintf(s, "%s\n\nDetailed error message:\n%s", message, message_detail);
 	GtkWidget *message_dialog = gtk_message_dialog_new(GTK_WINDOW(window),
@@ -1009,10 +1009,10 @@ gboolean full_screen_requested) {
 #endif
 	gtk_widget_show_all(window);
 	gtk_widget_realize(window);
+	full_screen = 0;
 	if (full_screen_requested) {
-		gtk_window_fullscreen(GTK_WINDOW(window));
+		enable_full_screen();
 	}
-	full_screen = full_screen_requested;
 }
 
 

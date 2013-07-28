@@ -33,6 +33,8 @@ extern void main_get_current_uri(const char **uri, const char **video_title_file
 extern GMainLoop *main_get_main_loop();
 extern void main_set_video_sink(const char *_video_sink);
 extern void main_set_audio_sink(const char *_audio_sink);
+extern gboolean main_have_gui();
+extern void main_show_error_message(const char *message, const char *details);
 
 /* config.c. */
 
@@ -65,12 +67,12 @@ extern gdouble config_get_uri_color_balance_default(int channel);
 
 /* gui.c */
 
-extern void gui_init(int *argcp, char **argvp[]);
+extern gboolean gui_init(int *argcp, char **argvp[]);
 extern void gui_setup_window(GMainLoop *loop, const char *video_filename, int video_width,
 	int video_height, gboolean full_screen);
 extern guintptr gui_get_video_window_handle();
 extern void gui_get_version(guint *major, guint *minor, guint *micro);
-extern void gui_show_error_message(gchar *message, char *detail);
+extern void gui_show_error_message(const gchar *message, const gchar *detail);
 
 /* gstreamer.c */
 

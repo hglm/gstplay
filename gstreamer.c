@@ -2,7 +2,7 @@
     gstplay -- Simple gstreamer-based media player
 
     Copyright 2013 Harm Hanemaaijer <fgenfb@yahoo.com>
- 
+
     gstplay is free software: you can redistribute it and/or modify it
     under the terms of the GNU Lesser General Public License as published
     by the Free Software Foundation, either version 3 of the License, or
@@ -109,8 +109,10 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
 
 	switch (GST_MESSAGE_TYPE (msg)) {
 	case GST_MESSAGE_EOS:
-		if (config_quit_on_stream_end())
+		if (config_quit_on_stream_end() || !main_have_gui()) {
+			gstreamer_destroy_pipeline();
 			g_main_loop_quit(loop);
+		}
 		end_of_stream = TRUE;
 		break;
 	case GST_MESSAGE_ERROR: {
@@ -122,7 +124,7 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
 
 		gstreamer_destroy_pipeline();
 
-		gui_show_error_message(
+		main_show_error_message(
 			"Processing error (unrecognized format or other error).",
 			error->message);
 		g_error_free (error);
@@ -156,6 +158,20 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
 				gst_element_set_state(pipeline, GST_STATE_PLAYING);
 		}
 		break;
+	case GST_MESSAGE_APPLICATION: {
+	        const GstStructure *s;
+	        s = gst_message_get_structure (msg);
+	        if (gst_structure_has_name (s, "GstLaunchInterrupt")) {
+			/* This application message is posted when we caught an interrupt and
+			 * we need to stop the pipeline. */
+			printf("gstplay: Interrupt: Stopping pipeline ...\n");
+			fflush(stdout);
+			fflush(stderr);
+			gstreamer_destroy_pipeline();
+	          	g_main_loop_quit(loop);
+		}
+		break;
+        }
 	default:
 		break;
 	}
@@ -349,10 +365,11 @@ gboolean gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState sta
 	GstBus *bus;
 	bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
 	bus_watch_id = gst_bus_add_watch(bus, bus_callback, loop);
+	if (main_have_gui())
 #if GST_CHECK_VERSION(1, 0, 0)
-	gst_bus_set_sync_handler(bus, (GstBusSyncHandler)bus_sync_handler, NULL, NULL);
+		gst_bus_set_sync_handler(bus, (GstBusSyncHandler)bus_sync_handler, NULL, NULL);
 #else
-	gst_bus_set_sync_handler(bus, (GstBusSyncHandler)bus_sync_handler, NULL);
+		gst_bus_set_sync_handler(bus, (GstBusSyncHandler)bus_sync_handler, NULL);
 #endif
 	gst_object_unref(bus);
 
@@ -383,6 +400,16 @@ gboolean gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState sta
 }
 
 void gstreamer_destroy_pipeline() {
+	GstState state, pending;
+	gst_element_set_state (pipeline, GST_STATE_PAUSED);
+	gst_element_get_state (pipeline, &state, &pending, GST_CLOCK_TIME_NONE);
+
+	/* Iterate main loop to process pending stuff. */
+	while (g_main_context_iteration (NULL, FALSE));
+
+	gst_element_set_state (pipeline, GST_STATE_READY);
+	gst_element_get_state (pipeline, &state, &pending, GST_CLOCK_TIME_NONE);
+
 	gst_element_set_state(pipeline, GST_STATE_NULL);
 
 	g_source_remove(bus_watch_id);

@@ -10,6 +10,10 @@ accelerated libav plugins) where available. To achieve this it does not
 use a double-buffered window and supports viewing files with all audio
 decoding disabled. It has been developed on an ARM platform.
 
+The program also supports console mode with a user-definable video sink
+outputting to (for example) the Linux framebuffer console. See the
+section on console usage.
+
 This is an early development release that has not yet been tested on a
 wide variety of media formats (only with mp4-type files on disk). Things
 like playlists and sliders and not (yet) supported.
@@ -51,6 +55,21 @@ Running "make" should work.
 Run with --options for command line options. However, gstplay also has an
 interactive mode with configurable settings.
 
+*** Running in console mode ***
+
+When X is not detected, gstplay will run in console mode with media specified
+on the command line. The video sink can be configured with the --videosink
+option; it is possible to pass property settings to the video sink, for example
+using bash:
+
+	gstplay --videosink '"fbdev2sink native-resolution-true"' video.mp4
+
+Note the use of double quotes inside single quotes (the single quotes cause the
+videosink argument to be parsed as one argument, while the double quotes are
+necessary for GStreamer to parse the videosink properties correctly).
+
+It is also possible enable console mode from an X terminal with the --nogui option.
+
 *** Issues ***
 
 - When using the xvimagesink the video area is not properly updated after
@@ -59,7 +78,16 @@ interactive mode with configurable settings.
 - When going fullscreen with GTK+ 3 an ugly transition with a white area is
   visible (should at least be black).
 
+- Using gstreamer 1.0 it possible to use a more elegant way to hook the window ID
+  than the current method.
+
+- At the moment when a media file is specified on the command line in GUI
+  mode gstplay will do a test pipeline run to determine the video size
+  before opening a window. This shouldn't be necessary.
+
 - Configuration cannot be saved yet.
 
 - Error handling could use improvment.
 
+- Passing suitable default or configured options to console sinks like
+  fbdev2sink should be possible.
