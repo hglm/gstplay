@@ -634,7 +634,7 @@ static void color_balance_set_defaults_button_clicked_cb(GtkButton *button, gpoi
 static void color_balance_set_global_defaults_button_clicked_cb(GtkButton *button,
 gpointer data) {
 	for (int i = 0; i < 4; i++)
-		if (gtk_widget_is_visible(color_slider[i]))
+		if (gtk_widget_get_visible(color_slider[i]))
 			config_set_global_color_balance_default(i,
 				gtk_range_get_value(GTK_RANGE(color_slider[i])));
 }
@@ -642,7 +642,7 @@ gpointer data) {
 static void color_balance_set_uri_defaults_button_clicked_cb(GtkButton *button,
 gpointer data) {
 	for (int i = 0; i < 4; i++)
-		if (gtk_widget_is_visible(color_slider[i]))
+		if (gtk_widget_get_visible(color_slider[i]))
 			config_set_uri_color_balance_default(i,
 				gtk_range_get_value(GTK_RANGE(color_slider[i])));
 }
@@ -870,7 +870,7 @@ static void create_menus(GMainLoop *loop) {
 		G_CALLBACK(menu_item_min_1min_activate_cb), loop);
 	GtkWidget *menu_item_plus_10sec = gtk_menu_item_new_with_label("+ 10 sec (>)");
 	g_signal_connect(G_OBJECT(menu_item_plus_10sec), "activate",
-		G_CALLBACK(menu_item_plus_1min_activate_cb), loop);
+		G_CALLBACK(menu_item_plus_10sec_activate_cb), loop);
 	GtkWidget *menu_item_min_10sec = gtk_menu_item_new_with_label("- 10 sec (<)");
 	g_signal_connect(G_OBJECT(menu_item_min_10sec), "activate",
 		G_CALLBACK(menu_item_min_10sec_activate_cb), loop);
