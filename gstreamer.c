@@ -151,7 +151,7 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
 		if (percent < 100) {
 			if (GST_STATE(pipeline) != GST_STATE_PAUSED)
 				gst_element_set_state(pipeline, GST_STATE_PAUSED);
-			printf("Buffering (%u percent done).n", percent);
+//			printf("Buffering (%u percent done)\n", percent);
 		}
 		else {
 			if (GST_STATE(pipeline) != GST_STATE_PLAYING)
@@ -598,11 +598,7 @@ void gstreamer_set_volume(gdouble volume) {
 }
 
 gboolean gstreamer_have_software_color_balance() {
-#if GST_CHECK_VERSION(1, 0, 0)
 	return TRUE;
-#else
-	return FALSE;
-#endif
 }
 
 void gstreamer_get_version(guint *major, guint *minor, guint *micro) {
@@ -616,16 +612,88 @@ void gstreamer_get_compiled_version(guint *major, guint *minor, guint *micro) {
 	*micro = GST_VERSION_MICRO;
 }
 
+#if !GST_CHECK_VERSION(1, 0, 0)
+
+static gboolean is_valid_color_balance_element(GstElement *element) {
+	return TRUE;
+}
+
+static GstElement *find_color_balance_element() {
+	GstIterator *iterator = gst_bin_iterate_all_by_interface(
+		GST_BIN(pipeline),  GST_TYPE_COLOR_BALANCE);
+	
+	GstElement *color_balance_element = NULL;
+	gboolean done = FALSE, hardware = FALSE;
+	gpointer item;
+	switch (gst_iterator_next(iterator, &item)) {
+	case GST_ITERATOR_OK : {
+		GstElement *element = GST_ELEMENT(item);
+		if (is_valid_color_balance_element(element)) {
+			if (!color_balance_element) {
+				color_balance_element = GST_ELEMENT_CAST(	
+					gst_object_ref(element));
+				hardware =
+					(gst_color_balance_get_balance_type(GST_COLOR_BALANCE
+					(element)) == GST_COLOR_BALANCE_HARDWARE);
+			}
+			else if (!hardware) {
+				gboolean tmp =
+					(gst_color_balance_get_balance_type(GST_COLOR_BALANCE
+					(element)) == GST_COLOR_BALANCE_HARDWARE);
+
+				if (tmp) {
+					if (color_balance_element)
+						gst_object_unref(color_balance_element);
+					color_balance_element =
+						GST_ELEMENT_CAST(gst_object_ref(element));
+					hardware = TRUE;
+				}
+			}
+		}
+		gst_object_unref(element);
+		if (hardware && color_balance_element)
+			done = TRUE;
+        	break;
+		}
+	case GST_ITERATOR_RESYNC :
+		gst_iterator_resync(iterator);
+		done = FALSE;
+		hardware = FALSE;
+		if (color_balance_element)
+			gst_object_unref(color_balance_element);
+		color_balance_element = NULL;
+		break;
+	case GST_ITERATOR_DONE:
+	case GST_ITERATOR_ERROR:
+	default:
+		done = TRUE;
+	}
+	gst_iterator_free(iterator);
+	return color_balance_element;
+}
+	
+#endif
+
+static GstElement *color_balance_element;
 static GstColorBalanceChannel *color_balance_channel[4];
 static gint last_value_set[4];
 
 int gstreamer_prepare_color_balance() {
-	if (!GST_IS_COLOR_BALANCE(pipeline))
+#if GST_CHECK_VERSION(1, 0, 0)
+	color_balance_element = pipeline;
+#else
+	color_balance_element = find_color_balance_element();
+	if (color_balance_element == NULL)
+		return 0;
+#endif
+	if (!GST_IS_COLOR_BALANCE(color_balance_element))
+		return 0;
+	GList *channel_list = gst_color_balance_list_channels(
+		GST_COLOR_BALANCE(color_balance_element));
+	if (channel_list == NULL)
 		return 0;
 	for (int i = 0; i < 4; i++)
 		color_balance_channel[i] = NULL;
-	GList *channel_list = gst_color_balance_list_channels(
-		GST_COLOR_BALANCE(pipeline));
 	channel_list = g_list_first(channel_list);
 	while (channel_list) {
 		GstColorBalanceChannel *channel = channel_list->data;
@@ -644,7 +712,7 @@ int gstreamer_prepare_color_balance() {
 		if (color_balance_channel[i] != NULL) {
 			r |= 1 << i;
 			last_value_set[i] = gst_color_balance_get_value(
-				GST_COLOR_BALANCE(pipeline), color_balance_channel[i]);
+				GST_COLOR_BALANCE(color_balance_element), color_balance_channel[i]);
 		}
 	}
 	return r;
@@ -657,7 +725,7 @@ void gstreamer_set_color_balance(int channel, gdouble value) {
 		+ value * 0.01 * (color_balance_channel[channel]->max_value -
 		color_balance_channel[channel]->min_value);
 	if (v != last_value_set[channel]) {
-		gst_color_balance_set_value(GST_COLOR_BALANCE(pipeline),
+		gst_color_balance_set_value(GST_COLOR_BALANCE(color_balance_element),
 			color_balance_channel[channel], v);
 		last_value_set[channel] = v;
 	}
@@ -668,7 +736,7 @@ gdouble gstreamer_get_color_balance(int channel) {
 		printf("gstplay: Could not read color balance channel.\n");
 		return - 1.0;
 	}
-	gdouble v = gst_color_balance_get_value(GST_COLOR_BALANCE(pipeline),
+	gdouble v = gst_color_balance_get_value(GST_COLOR_BALANCE(color_balance_element),
 		color_balance_channel[channel]);
 	// Normalize to [0, 100].
 	return (v - color_balance_channel[channel]->min_value) * 100.0 /

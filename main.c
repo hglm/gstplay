@@ -265,12 +265,14 @@ const char *main_create_pipeline(const char *uri, const char *video_title_filena
 		if (!config_software_volume()) {
 			flags &= ~(GST_PLAY_FLAG_SOFT_VOLUME);
 		}
+#if GST_CHECK_VERSION(1, 0, 0)
 		if (gstreamer_have_software_color_balance()) {
 			if (!config_software_color_balance()) {
 				flags &= ~(GST_PLAY_FLAG_SOFT_COLORBALANCE);
 			}
 		}
 		else
+#endif
 			/* GStreamer 0.10 doesn't support this flag. */
 			flags &= ~(GST_PLAY_FLAG_SOFT_COLORBALANCE);
 		sprintf(flags_str, " flags=%d", flags);
