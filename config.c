@@ -45,11 +45,12 @@ static gdouble global_color_balance_defaults[4];
 void config_init() {
 	/* Initialize with defaults. */
 	video_sink_name = malloc(sizeof(char *) * MAX_VIDEO_SINKS);
-	nu_video_sinks = 4;
+	nu_video_sinks = 5;
 	video_sink_name[0] = "ximagesink";
 	video_sink_name[1] = "xvimagesink";
-	video_sink_name[2] = "autovideosink";
-	video_sink_name[3] = "fakesink";
+	video_sink_name[2] = "eglglessink";
+	video_sink_name[3] = "autovideosink";
+	video_sink_name[4] = "fakesink";
 	audio_sink_name = malloc(sizeof(char *) * MAX_AUDIO_SINKS);
 	nu_audio_sinks = 4;
 	audio_sink_name[0] = "alsasink";
@@ -58,7 +59,7 @@ void config_init() {
 	audio_sink_name[3] = "fakesink";
 	startup_state = STARTUP_PLAYING;
 	video_only = FALSE;
-	video_sink_index = 2;
+	video_sink_index = 3;
 	audio_sink_index = 2;
 	quit_on_stream_end = FALSE;
 	software_volume = TRUE;

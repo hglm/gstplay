@@ -18,6 +18,7 @@
 
 */
 
+#define _GNU_SOURCE 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -612,10 +613,65 @@ void gstreamer_get_compiled_version(guint *major, guint *minor, guint *micro) {
 	*micro = GST_VERSION_MICRO;
 }
 
-#if !GST_CHECK_VERSION(1, 0, 0)
-
 static gboolean is_valid_color_balance_element(GstElement *element) {
 	return TRUE;
+}
+
+/*
+ * Brute force method to check whether xvimagesink is actually used by the pipeline.
+ * Playbin generates a tree of elements, so we need to iterate them recursively.
+ */
+
+static gboolean using_xvimagesink() {
+	GstIterator *iterator = gst_bin_iterate_recurse(GST_BIN(pipeline));
+	gboolean have_xvimagesink = FALSE;
+	gboolean done = FALSE;
+#if GST_CHECK_VERSION(1, 0, 0)
+	GValue item = G_VALUE_INIT;
+#else
+	gpointer item;
+#endif
+	while (!done) {
+		switch (gst_iterator_next(iterator, &item)) {
+		case GST_ITERATOR_OK : {
+#if GST_CHECK_VERSION(1, 0, 0)
+			GstElement *element = g_value_get_object(&item);
+#else
+			GstElement *element = GST_ELEMENT(item);
+#endif
+			GstElementClass *klass = GST_ELEMENT_GET_CLASS(element);
+#if GST_CHECK_VERSION(1, 0, 0)
+			char *s = gst_element_class_get_metadata(klass, "description");
+#else
+			char *s = klass->details.description;
+#endif
+			/* This is not the best way to check. */
+			if (strstr(s, "A Xv based videosink") != NULL ||
+			strstr(GST_OBJECT_NAME(element), "xvimage") != NULL) {
+				have_xvimagesink = TRUE;
+				done = TRUE;
+			}
+#if GST_CHECK_VERSION(1, 0, 0)
+			g_value_reset(&item);
+#endif
+        		break;
+		}
+		case GST_ITERATOR_RESYNC :
+			gst_iterator_resync(iterator);
+			have_xvimagesink = FALSE;
+			done = FALSE;
+			break;
+		case GST_ITERATOR_DONE:
+		case GST_ITERATOR_ERROR:
+		default:
+			done = TRUE;
+		}
+	}
+#if GST_CHECK_VERSION(1, 0, 0)
+	g_value_unset(&item);
+#endif
+	gst_iterator_free(iterator);
+	return have_xvimagesink;
 }
 
 static GstElement *find_color_balance_element() {
@@ -624,10 +680,19 @@ static GstElement *find_color_balance_element() {
 	
 	GstElement *color_balance_element = NULL;
 	gboolean done = FALSE, hardware = FALSE;
+#if GST_CHECK_VERSION(1, 0, 0)
+	GValue item = G_VALUE_INIT;
+#else
 	gpointer item;
+#endif
+	while (!done) {
 	switch (gst_iterator_next(iterator, &item)) {
 	case GST_ITERATOR_OK : {
+#if GST_CHECK_VERSION(1, 0, 0)
+		GstElement *element = g_value_get_object(&item);
+#else
 		GstElement *element = GST_ELEMENT(item);
+#endif
 		if (is_valid_color_balance_element(element)) {
 			if (!color_balance_element) {
 				color_balance_element = GST_ELEMENT_CAST(	
@@ -650,7 +715,9 @@ static GstElement *find_color_balance_element() {
 				}
 			}
 		}
-		gst_object_unref(element);
+#if GST_CHECK_VERSION(1, 0, 0)
+		g_value_reset(&item);
+#endif
 		if (hardware && color_balance_element)
 			done = TRUE;
         	break;
@@ -668,24 +735,24 @@ static GstElement *find_color_balance_element() {
 	default:
 		done = TRUE;
 	}
+	}
+#if GST_CHECK_VERSION(1, 0, 0)
+	g_value_unset(&item);
+#endif
 	gst_iterator_free(iterator);
 	return color_balance_element;
 }
-	
-#endif
 
-static GstElement *color_balance_element;
+static GstElement *color_balance_element = NULL;
 static GstColorBalanceChannel *color_balance_channel[4];
 static gint last_value_set[4];
 
 int gstreamer_prepare_color_balance() {
-#if GST_CHECK_VERSION(1, 0, 0)
-	color_balance_element = pipeline;
-#else
+	if (color_balance_element)
+		gst_object_unref(color_balance_element);
 	color_balance_element = find_color_balance_element();
 	if (color_balance_element == NULL)
 		return 0;
-#endif
 	if (!GST_IS_COLOR_BALANCE(color_balance_element))
 		return 0;
 	GList *channel_list = gst_color_balance_list_channels(
@@ -697,22 +764,37 @@ int gstreamer_prepare_color_balance() {
 	channel_list = g_list_first(channel_list);
 	while (channel_list) {
 		GstColorBalanceChannel *channel = channel_list->data;
-		if (strcmp(channel->label, "BRIGHTNESS") == 0)
+		if (strcasestr(channel->label, "BRIGHTNESS") != NULL)
 			color_balance_channel[CHANNEL_BRIGHTNESS] = channel;
-		else if (strcmp(channel->label, "CONTRAST") == 0)
+		else if (strcasestr(channel->label, "CONTRAST") != NULL)
 			color_balance_channel[CHANNEL_CONTRAST] = channel;
-		else if (strcmp(channel->label, "HUE") == 0)
+		else if (strcasestr(channel->label, "HUE") != NULL)
 			color_balance_channel[CHANNEL_HUE] = channel;
-		else if (strcmp(channel->label, "SATURATION") == 0)
+		else if (strcasestr(channel->label, "SATURATION") != NULL)
 			color_balance_channel[CHANNEL_SATURATION] = channel;
+		else
+			printf("gstplay: Unknown color balance channel %s detected.\n",
+				channel->label);
 		channel_list = g_list_next(channel_list);
 	}
-	int r;
+	int r = 0;
 	for (int i = 0; i < 4; i++) {
 		if (color_balance_channel[i] != NULL) {
-			r |= 1 << i;
-			last_value_set[i] = gst_color_balance_get_value(
+//			printf("gstplay: Color balance channel %s found.\n",
+//				color_balance_channel[i]->label);
+			if (using_xvimagesink() &&
+			strncmp(color_balance_channel[i]->label, "XV_", 3) != 0) {
+				char *s = g_malloc(strlen(color_balance_channel[i]->label) + 4);
+				sprintf(s, "XV_%s", color_balance_channel[i]->label);
+				g_free(color_balance_channel[i]->label);
+				color_balance_channel[i]->label = s;
+				printf("gstplay: Fixing mismatched xvimagesink color balance channel name to %s.\n",
+					s);
+			}
+			gint v = gst_color_balance_get_value(
 				GST_COLOR_BALANCE(color_balance_element), color_balance_channel[i]);
+			r |= 1 << i;
+			last_value_set[i] = v;
 		}
 	}
 	return r;

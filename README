@@ -73,7 +73,7 @@ It is also possible enable console mode from an X terminal with the --nogui opti
 *** Issues ***
 
 - When using the xvimagesink the video area is not properly updated after
-  an occluding window is removed.
+  an occluding window is removed. This seems to be specific to the sunxi platform.
 
 - When going fullscreen with GTK+ 3 an ugly transition with a white area is
   visible (should at least be black).

@@ -555,27 +555,20 @@ void color_balance_pipeline_destroyed_cb(gpointer data, GtkDialog *dialog) {
 static void menu_item_color_controls_activate_cb(GtkMenuItem *menu_item, GtkDialog *dialog) {
 	if (color_controls_active)
 		return;
-	if (!config_software_color_balance()) {
-		GtkWidget *message_dialog = gtk_message_dialog_new(GTK_WINDOW(window),
-			GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-			GTK_MESSAGE_INFO,
-			GTK_BUTTONS_OK,
-			"Software color balance disabled in settings.");
-		gtk_dialog_run(GTK_DIALOG(message_dialog));
-		gtk_widget_destroy(message_dialog);
-		return;
-	}
 	int r = 0;
 	if (!gstreamer_no_pipeline())
 		r = gstreamer_prepare_color_balance();
 	if (r == 0) {
+		char s[256];
+		sprintf(s, "Color balance control not available with current stream\n"
+			"or newer version of GStreamer required.\n");
+		if (!config_software_color_balance())
+			sprintf(s + strlen(s),
+			"\nNote: Software color balance disabled in settings.\n");
 		GtkWidget *message_dialog = gtk_message_dialog_new(GTK_WINDOW(window),
 			GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
 			GTK_MESSAGE_INFO,
-			GTK_BUTTONS_OK,
-			"Software color balance not available with current stream\n"
-			"or newer version of GStreamer required.\n"
-			);
+			GTK_BUTTONS_OK, s);
 		gtk_dialog_run(GTK_DIALOG(message_dialog));
 		gtk_widget_destroy(message_dialog);
 		return;
