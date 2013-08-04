@@ -52,10 +52,10 @@ typedef enum {
 } GstPlayFlags;
 
 #if GST_CHECK_VERSION(1, 0, 0)
-#define GSTREAMER_X_OVERLAY GstVideoOverlay
+#define GSTREAMER_VIDEO_OVERLAY GstVideoOverlay
 #define PLAYBIN_STR "playbin"
 #else
-#define GSTREAMER_X_OVERLAY GstXOverlay
+#define GSTREAMER_VIDEO_OVERLAY GstXOverlay
 #define PLAYBIN_STR "playbin2"
 
 /* Definitions for compatibility with GStreamer 0.10. */
@@ -77,18 +77,23 @@ static inline gboolean gst_is_video_overlay_prepare_window_handle_message(GstMes
 	return TRUE;
 }
 
+static inline gboolean gst_video_overlay_set_render_rectangle(GstXOverlay *overlay,
+int x, gint y, gint width, gint height) {
+	return gst_x_overlay_set_render_rectangle(overlay, x, y, width, height);
+}
+
 static inline GstCaps *gst_pad_get_current_caps(GstPad *pad) {
 	return gst_pad_get_negotiated_caps(pad);
 }
 
 #endif
 
-static GSTREAMER_X_OVERLAY *video_window_overlay = NULL;
+static GSTREAMER_VIDEO_OVERLAY *video_window_overlay = NULL;
 static GstElement *playbin_pipeline;
 static GstElement *pipeline;
 static guint bus_watch_id;
 static gboolean bus_quit_on_playing = FALSE;
-static gboolean set_default_settings_on_playing = FALSE;
+static gboolean state_change_to_playing_already_occurred = FALSE;
 static GList *created_pads_list = NULL;
 static const char *pipeline_description = "";
 static GstState suspended_state;
@@ -99,10 +104,16 @@ static gboolean end_of_stream = FALSE;
 static gboolean using_playbin;
 static GList *inform_pipeline_destroyed_cb_list;
 
-void gstreamer_expose_video_overlay() {
+static GstElement *find_xvimagesink();
+
+void gstreamer_expose_video_overlay(int x, int y, int w, int h) {
 	if (video_window_overlay == NULL)
 		return;
-	gst_video_overlay_expose(video_window_overlay);
+//	printf("Expose: offset (%d, %d), size (%d, %d)\n", x, y, w, h);
+	gst_video_overlay_set_render_rectangle(video_window_overlay, x, y, w, h);
+	// Expose events are handled automatically by plugins like
+	// xvimagesink and eglglessink with the default property settings.
+	// Calling expose explicitly causes lock-ups.
 }
 
 static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
@@ -114,6 +125,7 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
 			gstreamer_destroy_pipeline();
 			g_main_loop_quit(loop);
 		}
+		gstreamer_pause();
 		end_of_stream = TRUE;
 		break;
 	case GST_MESSAGE_ERROR: {
@@ -131,6 +143,22 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
 		g_error_free (error);
 		break;
 		}
+	case GST_MESSAGE_QOS: {
+		GstFormat format;
+		guint64 processed;
+		guint64 dropped;
+		gst_message_parse_qos_stats(msg, &format, &processed, &dropped);
+		if (format == GST_FORMAT_BUFFERS)  {
+			GstElement *src = GST_MESSAGE_SRC(msg);
+			char *name = gst_element_get_name(src);
+//			printf("gstplay: %s reports %lu out of %lu frames (%d%%) dropped.\n",
+//				name,
+//				dropped, processed + dropped,
+//				(int)(dropped * 100 / (processed + dropped)));
+			g_free(name);
+		}
+		break;
+	}
 	case GST_MESSAGE_STATE_CHANGED:
 		if (bus_quit_on_playing) {
 			// When doing the initial run to determine video parameters,
@@ -138,11 +166,22 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
 			if (GST_STATE(playbin_pipeline) == GST_STATE_PLAYING)
 				g_main_loop_quit(loop);
 		}
-		if (set_default_settings_on_playing &&
+		if (!state_change_to_playing_already_occurred &&
 		GST_STATE(pipeline) == GST_STATE_PLAYING) {
 			gstreamer_set_default_settings();
-			set_default_settings_on_playing = FALSE;
+#if !GST_CHECK_VERSION(1, 0, 0)
+			// GStreamer 0.10's xvimagesink does not force aspect ratio by default.
+			GstElement *xvimagesink = find_xvimagesink();
+			if (xvimagesink)
+				g_object_set(G_OBJECT(xvimagesink),
+					"force-aspect-ratio", TRUE, NULL);
+#endif
+			// Trigger a callback for the GUI to update the status bar etc.
+			gui_play_start_cb();
+			state_change_to_playing_already_occurred = TRUE;
 		}
+		if (GST_STATE(pipeline) == GST_STATE_PLAYING)
+			gui_state_change_to_playing_cb();
 		break;
 	case GST_MESSAGE_BUFFERING:
 		if (bus_quit_on_playing)
@@ -188,6 +227,9 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *msg, gpointer d
 	// GST_MESSAGE_SRC (message) will be the video sink element.
 	video_window_overlay = GST_VIDEO_OVERLAY(GST_MESSAGE_SRC(msg));
 	gst_video_overlay_set_window_handle(video_window_overlay, video_window_handle);
+	int x, y, w, h;
+	gui_get_render_rectangle(&x, &y, &w, &h);
+	gst_video_overlay_set_render_rectangle(video_window_overlay, x, y, w, h);
 	return GST_BUS_DROP;
 }
 
@@ -354,6 +396,8 @@ void for_each_pipeline_element(gpointer value_data, gpointer data) {
 }
 
 gboolean gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState state) {
+	main_set_real_time_scheduling_policy();
+
 	GError *error = NULL;
 	pipeline = gst_parse_launch(s, &error);
 	if (!pipeline) {
@@ -386,7 +430,7 @@ gboolean gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState sta
 
 	gst_element_set_state(pipeline, GST_STATE_READY);
 
-	set_default_settings_on_playing = TRUE;
+	state_change_to_playing_already_occurred = FALSE;
 
 	if (state == STARTUP_PLAYING)
 		gst_element_set_state(pipeline, GST_STATE_PLAYING);
@@ -401,6 +445,8 @@ gboolean gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState sta
 }
 
 void gstreamer_destroy_pipeline() {
+	main_set_normal_scheduling_policy();
+
 	GstState state, pending;
 	gst_element_set_state (pipeline, GST_STATE_PAUSED);
 	gst_element_get_state (pipeline, &state, &pending, GST_CLOCK_TIME_NONE);
@@ -438,18 +484,25 @@ void gstreamer_add_pipeline_destroyed_cb(GCallback cb_func, gpointer user_data) 
 		closure);
 }
 
-void gstreamer_play() {
-	gst_element_set_state(pipeline, GST_STATE_PLAYING);
+gboolean gstreamer_play() {
+	main_set_real_time_scheduling_policy();
+	return gst_element_set_state(pipeline, GST_STATE_PLAYING) != GST_STATE_CHANGE_ASYNC;
 }
 
-void gstreamer_pause() {
-	gst_element_set_state(pipeline, GST_STATE_PAUSED);
+gboolean gstreamer_pause() {
+	main_set_normal_scheduling_policy();
+	return gst_element_set_state(pipeline, GST_STATE_PAUSED) != GST_STATE_CHANGE_ASYNC;
 }
 
 static GstState gstreamer_get_state() {
 	GstState state = GST_STATE_VOID_PENDING;
 	gst_element_get_state(pipeline, &state, NULL, 0);
 	return state;
+}
+
+gboolean gstreamer_state_is_playing() {
+	GstState state = gstreamer_get_state();
+	return state == GST_STATE_PLAYING;
 }
 
 gint64 gstreamer_get_position(gboolean *error) {
@@ -485,7 +538,7 @@ gint64 gstreamer_get_position(gboolean *error) {
 			return pos;
 		}
 	}
-	printf("gstplay: Could not succesfully query current position.\n");
+//	printf("gstplay: Could not succesfully query current position.\n");
 	if (error != NULL)
 		*error = TRUE;
 	return 0;
@@ -509,7 +562,7 @@ gint64 gstreamer_get_duration() {
 const gchar *gstreamer_get_duration_str() {
 	gint64 duration = gstreamer_get_duration();
 	char s[80];
-	sprintf(s, "%"GST_TIME_FORMAT, GST_TIME_ARGS(duration));
+	sprintf(s, "%u:%02u:%02u", GST_TIME_ARGS(duration));
 	return strdup(s);
 }
 
@@ -546,6 +599,8 @@ gboolean gstreamer_no_video() {
 }
 
 void gstreamer_suspend_pipeline() {
+	main_set_normal_scheduling_policy();
+
 	if (gstreamer_no_pipeline()) {
 		suspended_state = GST_STATE_NULL;
 		return;
@@ -561,6 +616,9 @@ void gstreamer_suspend_pipeline() {
 void gstreamer_restart_pipeline() {
 	if (suspended_state == GST_STATE_NULL)
 		return;
+
+	main_set_real_time_scheduling_policy();
+
 	/* Restart the pipeline. */
 	const char *uri;
 	const char *video_title_filename;
@@ -620,11 +678,12 @@ static gboolean is_valid_color_balance_element(GstElement *element) {
 /*
  * Brute force method to check whether xvimagesink is actually used by the pipeline.
  * Playbin generates a tree of elements, so we need to iterate them recursively.
+ * Returns xvimagesink element if present, NULL if not.
  */
 
-static gboolean using_xvimagesink() {
+static GstElement *find_xvimagesink() {
 	GstIterator *iterator = gst_bin_iterate_recurse(GST_BIN(pipeline));
-	gboolean have_xvimagesink = FALSE;
+	GstElement *xvimagesink = NULL;
 	gboolean done = FALSE;
 #if GST_CHECK_VERSION(1, 0, 0)
 	GValue item = G_VALUE_INIT;
@@ -648,7 +707,7 @@ static gboolean using_xvimagesink() {
 			/* This is not the best way to check. */
 			if (strstr(s, "A Xv based videosink") != NULL ||
 			strstr(GST_OBJECT_NAME(element), "xvimage") != NULL) {
-				have_xvimagesink = TRUE;
+				xvimagesink = element;
 				done = TRUE;
 			}
 #if GST_CHECK_VERSION(1, 0, 0)
@@ -658,7 +717,7 @@ static gboolean using_xvimagesink() {
 		}
 		case GST_ITERATOR_RESYNC :
 			gst_iterator_resync(iterator);
-			have_xvimagesink = FALSE;
+			xvimagesink = NULL;
 			done = FALSE;
 			break;
 		case GST_ITERATOR_DONE:
@@ -671,7 +730,7 @@ static gboolean using_xvimagesink() {
 	g_value_unset(&item);
 #endif
 	gst_iterator_free(iterator);
-	return have_xvimagesink;
+	return xvimagesink;
 }
 
 static GstElement *find_color_balance_element() {
@@ -782,7 +841,7 @@ int gstreamer_prepare_color_balance() {
 		if (color_balance_channel[i] != NULL) {
 //			printf("gstplay: Color balance channel %s found.\n",
 //				color_balance_channel[i]->label);
-			if (using_xvimagesink() &&
+			if (find_xvimagesink() &&
 			strncmp(color_balance_channel[i]->label, "XV_", 3) != 0) {
 				char *s = g_malloc(strlen(color_balance_channel[i]->label) + 4);
 				sprintf(s, "XV_%s", color_balance_channel[i]->label);
@@ -833,3 +892,16 @@ void gstreamer_set_default_settings() {
 	for (int i = 0; i < 4; i++)
 		gstreamer_set_color_balance(i, config_get_global_color_balance_default(i));
 }
+
+/* Function that refreshes the video frame if the pipeline is in PAUSED mode. */
+
+void gstreamer_refresh_frame() {
+	if (gstreamer_get_state() == GST_STATE_PAUSED) {
+		// Performing a flushing seek to the current position will redraw the frame.
+		gboolean error;
+		gint64 pos = gstreamer_get_position(&error);
+		if (!error)
+			gstreamer_seek_to_time(pos);
+	}
+}
+

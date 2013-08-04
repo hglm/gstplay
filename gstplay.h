@@ -35,6 +35,9 @@ extern void main_set_video_sink(const char *_video_sink);
 extern void main_set_audio_sink(const char *_audio_sink);
 extern gboolean main_have_gui();
 extern void main_show_error_message(const char *message, const char *details);
+extern void main_set_real_time_scheduling_policy();
+extern void main_set_normal_scheduling_policy();
+extern void main_thread_yield();
 
 /* config.c. */
 
@@ -71,8 +74,13 @@ extern gboolean gui_init(int *argcp, char **argvp[]);
 extern void gui_setup_window(GMainLoop *loop, const char *video_filename, int video_width,
 	int video_height, gboolean full_screen);
 extern guintptr gui_get_video_window_handle();
+extern void gui_get_render_rectangle(int *x, int *y, int *w, int *h);
 extern void gui_get_version(guint *major, guint *minor, guint *micro);
 extern void gui_show_error_message(const gchar *message, const gchar *detail);
+/* Callback triggered when a state change to PLAYING occurs for the first time. */
+extern void gui_play_start_cb();
+/* Callback triggered when any state change to PLAYING occurs. */
+extern void gui_state_change_to_playing_cb();
 
 /* gstreamer.c */
 
@@ -81,7 +89,7 @@ extern void gstreamer_get_version(guint *major, guint *minor, guint *micro);
 extern void gstreamer_get_compiled_version(guint *major, guint *minor, guint *micro);
 extern gboolean gstreamer_have_software_color_balance();
 extern void gstreamer_determine_video_dimensions(const char *uri, int *video_width, int *video_height);
-extern void gstreamer_expose_video_overlay();
+extern void gstreamer_expose_video_overlay(int x, int y, int w, int h);
 extern gboolean gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState startup);
 extern void gstreamer_destroy_pipeline();
 extern void gstreamer_get_video_dimensions(int *width, int *height);
@@ -89,8 +97,11 @@ extern void gstreamer_get_video_info(const char **format, int *width, int *heigh
 int *framerate_numeratorp, int *framerate_denomp, int *pixel_aspect_ratio_nump,
 int *pixel_aspect_ratio_denomp);
 extern const char *gstreamer_get_pipeline_description();
-extern void gstreamer_play();
-extern void gstreamer_pause();
+// Set the state to playing; returns TRUE if the state was set immediately.
+extern gboolean gstreamer_play();
+// Set the state to paused; returns TRUE if the state was set immediately.
+extern gboolean gstreamer_pause();
+extern gboolean gstreamer_state_is_playing();
 extern gint64 gstreamer_get_position(gboolean *error);
 extern void gstreamer_seek_to_time(gint64 time_nanoseconds);
 extern gint64 gstreamer_get_duration();
@@ -110,3 +121,4 @@ extern void gstreamer_set_color_balance(int channel, gdouble value);
 extern gdouble gstreamer_get_color_balance(int channel);
 extern void gstreamer_add_pipeline_destroyed_cb(GCallback cb_func, gpointer user_data);
 extern void gstreamer_set_default_settings();
+extern void gstreamer_refresh_frame();

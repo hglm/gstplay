@@ -32,8 +32,14 @@
 static GtkWidget *window, *video_window;
 static guintptr video_window_handle = 0;
 static gboolean full_screen = FALSE;
-static GtkWidget *menu_bar;
+static GtkWidget *menu_bar, *status_bar, *status_bar_duration_label;
+static GtkWidget *position_slider;
 GtkWidget *open_file_dialog;
+guint update_status_bar_cb_id;
+
+static void gui_reset_status_bar();
+static gboolean gui_update_status_bar_cb(gpointer data);
+static void gui_status_bar_pipeline_destroyed_cb(gpointer data, GtkWidget *status_bar);
 
 gboolean gui_init(int *argcp, char **argvp[]) {
 	return gtk_init_check(argcp, argvp);
@@ -45,25 +51,61 @@ void gui_get_version(guint *major, guint *minor, guint *micro) {
 	*micro = gtk_micro_version;
 }
 
-static void video_window_realize_cb (GtkWidget * widget, gpointer data) {
+static void video_widget_realize_cb (GtkWidget * widget, gpointer data) {
 #if GTK_CHECK_VERSION(2,18,0)
 	// Tell Gtk+/Gdk to create a native window for this widget instead of
 	// drawing onto the parent widget.
 	// This is here just for pedagogical purposes, GDK_WINDOW_XID will call
 	// it as well in newer Gtk versions
 #if !GTK_CHECK_VERSION(3, 0, 0)
-	if (!gdk_window_ensure_native(widget->window))
-		g_error ("Couldn't create native window needed for GstVideoOverlay!");
+	if (!gdk_window_ensure_native(gtk_widget_get_window(widget)))
+		g_error("Couldn't create native window needed for GstVideoOverlay!");
 #endif
 #endif
 
 #ifdef GDK_WINDOWING_X11
-	gulong xid = GDK_WINDOW_XID(gtk_widget_get_window (video_window));
+	gulong xid = GDK_WINDOW_XID(gtk_widget_get_window(widget));
 	video_window_handle = xid;
 #endif
 #ifdef GDK_WINDOWING_WIN32
-	HWND wnd = GDK_WINDOW_HWND(gtk_widget_get_window (video_window));
+	HWND wnd = GDK_WINDOW_HWND(gtk_widget_get_window(widget));
 	video_window_handle = (guintptr) wnd;
+#endif
+
+}
+
+void gui_get_render_rectangle(int *x, int *y, int *w, int *h) {
+#if 0
+/* Video window is not a seperate subwindow. */
+#if GTK_CHECK_VERSION(3, 0, 0)
+	int window_w = gtk_widget_get_allocated_width(window);
+	int window_h = gtk_widget_get_allocated_height(window);
+	// Get the height of the menu bar.
+	int menu_h = gtk_widget_get_allocated_height(menu_bar);
+#else
+	int window_w = window->allocation.width;
+	int window_h = window->allocation.height;
+	int menu_h = menu_bar->allocation.height;
+#endif
+	if (full_screen)
+		menu_h = 0;
+	*x = 0;
+	*y = menu_h;
+	*w = window_w;
+	*h = window_h - menu_h;
+#else
+/* Video window is a seperate subwindow. */
+#if GTK_CHECK_VERSION(3, 0, 0)
+	int video_window_w = gtk_widget_get_allocated_width(video_window);
+	int video_window_h = gtk_widget_get_allocated_height(video_window);
+#else
+	int video_window_w = video_window->allocation.width;
+	int video_window_h = video_window->allocation.height;
+#endif
+	*x = 0;
+	*y = 0;
+	*w = video_window_w;
+	*h = video_window_h;
 #endif
 }
 
@@ -74,11 +116,13 @@ static gboolean video_window_draw_cb(GtkWidget *widget, cairo_t *cr, gpointer da
 		cairo_reset_clip(cr);
 		cairo_set_source_rgb(cr, 0, 0, 0);
 		cairo_paint(cr);
-		return TRUE;
+		return FALSE;
 	}
 //	printf("gstplay: exposing video overlay.\n");
-	gstreamer_expose_video_overlay();
-	return TRUE;
+	int x, y, w, h;
+	gui_get_render_rectangle(&x, &y, &w, &h);
+	gstreamer_expose_video_overlay(x, y, w, h);
+	return FALSE;
 }
 
 #else
@@ -91,11 +135,13 @@ gpointer data) {
 		cairo_set_source_rgb(cr, 0, 0, 0);
 		cairo_paint(cr);
 		cairo_destroy(cr);
-		return TRUE;
+		return FALSE;
 	}
 //	printf("gstplay: exposing video overlay.\n");
-	gstreamer_expose_video_overlay();
-	return TRUE;
+	int x, y, w, h;
+	gui_get_render_rectangle(&x, &y, &w, &h);
+	gstreamer_expose_video_overlay(x, y, w, h);
+	return FALSE;
 }
 
 #endif
@@ -103,7 +149,17 @@ gpointer data) {
 guintptr gui_get_video_window_handle() {
 	return video_window_handle;
 }
+void gui_status_bar_pipeline_destroyed_cb(gpointer data, GtkWidget *widget) {
+	/* Remove the periodic time-out to update the position slider. */
+	g_source_remove(update_status_bar_cb_id);
+}
 
+void gui_play_start_cb() {
+	gui_reset_status_bar();
+	/* Add a periodic time-out to update the position slider. */
+	update_status_bar_cb_id = g_timeout_add_seconds(1, gui_update_status_bar_cb, NULL);
+	gstreamer_add_pipeline_destroyed_cb(gui_status_bar_pipeline_destroyed_cb, status_bar);
+}
 
 static void enable_full_screen() {
 #if GTK_CHECK_VERSION(3, 0, 0)
@@ -116,8 +172,9 @@ static void enable_full_screen() {
 	gtk_widget_modify_bg(window, GTK_STATE_NORMAL, &color);
 #endif
 	gtk_widget_hide(menu_bar);
-	gtk_window_fullscreen(GTK_WINDOW(window));
+	gtk_widget_hide(status_bar);
 	full_screen = 1;
+	gtk_window_fullscreen(GTK_WINDOW(window));
 }
 
 static void disable_full_screen() {
@@ -125,8 +182,9 @@ static void disable_full_screen() {
 	gdk_color_parse("white", &color);
 	gtk_widget_modify_bg(window, GTK_STATE_NORMAL, &color);
 	gtk_widget_show(menu_bar);
-	gtk_window_unfullscreen(GTK_WINDOW(window));
+	gtk_widget_show(status_bar);
 	full_screen = 0;
+	gtk_window_unfullscreen(GTK_WINDOW(window));
 }
 
 static void forward_stream_by(gint64 delta);
@@ -293,6 +351,7 @@ static void menu_item_open_file_activate_cb(GtkMenuItem *menu_item, gpointer dat
 		config_get_startup_preference())) {
 			gui_show_error_message("Pipeline parse problem.", "");
 		}
+		gui_reset_status_bar();
 		return;
 	}
 	gtk_widget_hide(open_file_dialog);
@@ -372,7 +431,7 @@ static void menu_item_pause_activate_cb(GtkMenuItem *menu_item, gpointer data) {
 static void menu_item_rewind_activate_cb(GtkMenuItem *menu_item, gpointer data) {
 	if (gstreamer_no_pipeline())
 		return;
-	gstreamer_seek_to_time(0);
+	gtk_range_set_value(GTK_RANGE(position_slider), 0);
 }
 
 static void menu_item_seek_to_end_activate_cb(GtkMenuItem *menu_item, gpointer data) {
@@ -383,8 +442,10 @@ static void menu_item_seek_to_end_activate_cb(GtkMenuItem *menu_item, gpointer d
 	gint64 duration = gstreamer_get_duration();
 	if (duration > 0) {
 		// Actually seek to end of stream - 0.1s.
-		if (duration - 100000000 >= 0)
-			gstreamer_seek_to_time(duration - 100000000);
+		if (duration - 100000000 >= 0) {
+			gdouble value = (gdouble) (duration - 100000000) * 100.0 / duration;
+			gtk_range_set_value(GTK_RANGE(position_slider), value);
+		}
 	}
 }
 
@@ -398,12 +459,14 @@ static void forward_stream_by(gint64 delta) {
 	pos += delta;
 	gint64 duration = gstreamer_get_duration();
 	if (duration != 0 && pos > duration) {
-		// When the end of stream is eached, actually seek to end of stream - 0.1s.
+		// When the end of stream is reached, actually seek to end of stream - 0.1s.
 		pos = duration - 100000000;
 		if (pos < 0)
 			pos = 0;
 	}
-	gstreamer_seek_to_time(pos);
+	/* Updating the status bar slider will trigger a seek on the stream. */
+	gdouble value = (gdouble) pos * 100.0 / duration;
+	gtk_range_set_value(GTK_RANGE(position_slider), value);
 }
 
 static void rewind_stream_by(gint64 delta) {
@@ -416,7 +479,10 @@ static void rewind_stream_by(gint64 delta) {
 	pos -= delta;
 	if (pos < 0)
 		pos = 0;
-	gstreamer_seek_to_time(pos);
+	gint64 duration = gstreamer_get_duration();
+	/* Updating the status bar slider will trigger a seek on the stream. */
+	gdouble value = (gdouble) pos * 100.0 / duration;
+	gtk_range_set_value(GTK_RANGE(position_slider), value);
 }
 
 static void menu_item_plus_1min_activate_cb(GtkMenuItem *menu_item, gpointer data) {
@@ -485,16 +551,21 @@ static void toggle_mute() {
 			TRUE);
 }
 
-static void resize_video_window(int width, int height) {
+static void resize_video_window(int width, int height, gboolean draw) {
 	// Get the height of the menu bar.
 #if GTK_CHECK_VERSION(3, 0, 0)
-	int h = gtk_widget_get_allocated_height(menu_bar);
+	int menu_h = gtk_widget_get_allocated_height(menu_bar);
+	int status_h = gtk_widget_get_allocated_height(status_bar);
 #else
-	int h = menu_bar->allocation.height;
+	int menu_h = menu_bar->allocation.height;
+	int status_h = status_bar->allocation.height;
 #endif
-	// Resize to a height of the menu bar height + the video window height.
-	gtk_widget_set_size_request(video_window, width, height);
-	gtk_window_resize(GTK_WINDOW(window), width, height + h);
+//	gtk_widget_set_default_size(video_window, width, height);
+	gtk_window_resize(GTK_WINDOW(window), width, height + menu_h + status_h);
+
+	gboolean result;
+	if (draw)
+		gtk_widget_queue_draw(video_window);
 }
 
 static void menu_item_one_to_one_activate_cb(GtkMenuItem *menu_item, gpointer data) {
@@ -503,7 +574,7 @@ static void menu_item_one_to_one_activate_cb(GtkMenuItem *menu_item, gpointer da
 	int width, height;
 	gstreamer_get_video_dimensions(&width, &height);
 	if (width != 0 && height != 0)
-		resize_video_window(width, height);
+		resize_video_window(width, height, TRUE);
 }
 
 static void menu_item_zoom_x2_activate_cb(GtkMenuItem *menu_item, gpointer data) {
@@ -512,7 +583,7 @@ static void menu_item_zoom_x2_activate_cb(GtkMenuItem *menu_item, gpointer data)
 	int width, height;
 	gstreamer_get_video_dimensions(&width, &height);
 	if (width != 0 && height != 0)
-		resize_video_window(width * 2, height * 2);
+		resize_video_window(width * 2, height * 2, TRUE);
 }
 
 
@@ -522,7 +593,7 @@ static void menu_item_zoom_x05_activate_cb(GtkMenuItem *menu_item, gpointer data
 	int width, height;
 	gstreamer_get_video_dimensions(&width, &height);
 	if (width != 0 && height != 0)
-		resize_video_window(width / 2, height / 2);
+		resize_video_window(width / 2, height / 2, TRUE);
 }
 
 static void menu_item_full_screen_activate_cb(GtkMenuItem *menu_item, gpointer data) {
@@ -616,6 +687,7 @@ static void color_slider_value_changed_cb(GtkScale *scale, GtkLabel *label) {
 			GTK_RANGE(scale)));
 		break;
 	}
+	gstreamer_refresh_frame();
 }
 
 static void color_balance_set_defaults_button_clicked_cb(GtkButton *button, gpointer data) {
@@ -671,6 +743,155 @@ static void menu_item_about_activate_cb(GtkMenuItem *menu_item, gpointer data) {
 	gtk_dialog_run(GTK_DIALOG(dialog));
 	gtk_widget_hide(dialog);
 	gtk_widget_destroy(dialog);
+}
+
+// Status bar.
+
+// Number of milliseconds to play for after a scrub seek.
+#define SCRUB_TIME 100
+
+static guint position_slider_value_changed_cb_id;
+static guint position_slider_value_changed_scrub_seek_cb_id;
+static guint seek_timeout_id = 0;
+static gboolean state_was_playing;
+static gint64 current_seek_target_position;
+static gint64 next_seek_target_position;
+static gint64 cached_duration;
+
+static void position_slider_value_changed_cb(GtkScale *scale, gpointer data) {
+	if (gstreamer_no_pipeline())
+		return;
+	gdouble v = gtk_range_get_value(GTK_RANGE(scale));
+	gint64 duration = gstreamer_get_duration();
+	gint64 pos = (v / 100.0) * duration;
+	gstreamer_seek_to_time(pos);
+}
+
+void gui_reset_status_bar() {
+	g_signal_handlers_block_by_func(position_slider, position_slider_value_changed_cb,
+		NULL);
+	gtk_range_set_value(GTK_RANGE(position_slider), 0);
+	g_signal_handlers_unblock_by_func(position_slider, position_slider_value_changed_cb,
+		NULL);
+	gtk_label_set_text(GTK_LABEL(status_bar_duration_label),
+		gstreamer_get_duration_str());
+}
+
+// Handler that is called every second to update the progress slider in the status bar.
+
+gboolean gui_update_status_bar_cb(gpointer data) {
+	if (gstreamer_no_pipeline())
+		return TRUE;
+	// Return when doing scrub seek.
+	if (position_slider_value_changed_cb_id == 0)
+		return TRUE;
+	gint64 duration = gstreamer_get_duration();
+	if (duration == 0)
+		return TRUE;
+	gboolean error;
+	gint64 pos = gstreamer_get_position(&error);
+	if (error)
+		return TRUE;
+	gdouble value = (gdouble)pos * 100.0 / duration;
+	// Don't trigger a gstreamer seek when the value is changed.
+	g_signal_handlers_block_by_func(position_slider, position_slider_value_changed_cb,
+		NULL);
+	gtk_range_set_value(GTK_RANGE(position_slider), value);
+	g_signal_handlers_unblock_by_func(position_slider, position_slider_value_changed_cb,
+		NULL);
+	return TRUE;
+}
+
+static gchar *position_slider_format_value_cb(GtkScale *scale, gdouble value) {
+	return g_strdup_printf("%.0lf%%", value);
+}
+
+static gboolean end_scrub(gpointer data) {
+	if (position_slider_value_changed_cb_id != 0)
+		return FALSE;
+	seek_timeout_id = 0;
+	if (next_seek_target_position == - 1) {
+		gstreamer_pause();
+		current_seek_target_position = - 1;
+	}
+	else {
+		// If a new seek target is pending, perform a new seek.
+		gstreamer_pause();
+		gstreamer_seek_to_time(next_seek_target_position);
+		current_seek_target_position = next_seek_target_position;	
+		next_seek_target_position = -1;
+		gstreamer_play();
+	}
+	return FALSE;
+}
+
+void gui_state_change_to_playing_cb() {
+	// When doing a scrub seek, play for SCRUB_TIME ms.
+	if (position_slider_value_changed_cb_id == 0) {
+		if (seek_timeout_id == 0) {
+			seek_timeout_id = g_timeout_add(SCRUB_TIME,
+				(GSourceFunc)end_scrub, NULL);
+		}
+	}
+}
+
+static void position_slider_value_changed_scrub_seek_cb(GtkScale *scale, gpointer data) {
+	if (gstreamer_no_pipeline())
+		return;
+	gdouble v = gtk_range_get_value(GTK_RANGE(scale));
+	if (cached_duration == - 1)
+		cached_duration = gstreamer_get_duration();
+	gint64 pos = (v / 100.0) * cached_duration;
+	// Wait until the current seek operation is finished before updating the
+	// seek position.
+	if (current_seek_target_position == - 1) {
+//		printf("value changed to %lu, seek\n", pos);
+		gstreamer_seek_to_time(pos);
+		current_seek_target_position = pos;
+		gstreamer_play();
+	}
+	else {
+//		printf("value changed to %lu, seek next\n", pos);
+		next_seek_target_position = pos;
+	}
+	// Try to prevent the GUI from taking up most CPU cycles (reduce the frequency of
+	// this callback).
+	main_thread_yield();
+}
+
+static gboolean position_slider_button_press_cb(GtkWidget *scale, GdkEventButton * event,
+gpointer data) {
+	if (position_slider_value_changed_cb_id > 0) {
+		// Disable the signal handler that instantly seeks when the slider value is changed.
+		g_signal_handler_disconnect(position_slider, position_slider_value_changed_cb_id);
+		position_slider_value_changed_cb_id = 0;
+		state_was_playing = gstreamer_state_is_playing();
+		gstreamer_pause();
+		// Install the scrub seek signal handler.
+		position_slider_value_changed_scrub_seek_cb_id = g_signal_connect(
+			G_OBJECT(position_slider), "value-changed",
+			G_CALLBACK(position_slider_value_changed_scrub_seek_cb), NULL);
+		current_seek_target_position = - 1;
+		next_seek_target_position = - 1;
+		seek_timeout_id = 0;
+		cached_duration = - 1;
+	}
+	return FALSE;
+}
+
+static gboolean position_slider_button_release_cb(GtkScale *scale, GdkEventButton * event,
+gpointer data) {
+	if (position_slider_value_changed_cb_id == 0) {
+		// Disable the scrub seek signal handler.
+		g_signal_handler_disconnect(position_slider,
+			position_slider_value_changed_scrub_seek_cb_id);
+		// Reconnect the signal handler that instantly seeks when the slider value is changed.
+		position_slider_value_changed_cb_id = g_signal_connect(G_OBJECT(position_slider),
+			"value-changed", G_CALLBACK(position_slider_value_changed_cb), NULL);
+		if (state_was_playing)
+			gstreamer_play();
+	}
+	return FALSE;
 }
 
 static GtkWidget *create_preferences_dialog() {
@@ -941,6 +1162,40 @@ static void create_menus(GMainLoop *loop) {
 	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), help_item);
 }
 
+static void create_status_bar() {
+#if GTK_CHECK_VERSION(3, 0, 0)
+	status_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	position_slider = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0,
+		100.0, 1.0);
+	gtk_widget_set_hexpand(position_slider, TRUE);
+#else
+	status_bar = gtk_hbox_new(FALSE, 0);
+	position_slider = gtk_hscale_new_with_range(0,
+		100.0, 1.0);
+#endif
+	g_object_set(status_bar, "spacing", 8, NULL);
+	gtk_scale_set_draw_value(GTK_SCALE(position_slider), TRUE);
+	gtk_scale_set_value_pos(GTK_SCALE(position_slider), GTK_POS_LEFT);
+	gtk_scale_set_digits(GTK_SCALE(position_slider), 3);
+	gtk_range_set_value(GTK_RANGE(position_slider), 0.0);
+	g_signal_connect(G_OBJECT(position_slider), "format-value", G_CALLBACK(
+		position_slider_format_value_cb), NULL);
+	g_signal_connect(G_OBJECT(position_slider), "button-press-event", G_CALLBACK(
+		position_slider_button_press_cb), NULL);
+	g_signal_connect(G_OBJECT(position_slider), "button-release-event", G_CALLBACK(
+		position_slider_button_release_cb), NULL);
+	position_slider_value_changed_cb_id = g_signal_connect(G_OBJECT(position_slider),
+		"value-changed", G_CALLBACK(position_slider_value_changed_cb), NULL);
+	status_bar_duration_label = gtk_label_new("");
+#if GTK_CHECK_VERSION(3, 0, 0)
+	gtk_container_add(GTK_CONTAINER(status_bar), position_slider);
+	gtk_container_add(GTK_CONTAINER(status_bar), status_bar_duration_label);
+#else
+	gtk_box_pack_start(GTK_BOX(status_bar), position_slider, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(status_bar), status_bar_duration_label, FALSE, FALSE, 0);
+#endif
+}
+
 void gui_setup_window(GMainLoop *loop, const char *video_filename, int width, int height,
 gboolean full_screen_requested) {
 
@@ -949,9 +1204,10 @@ gboolean full_screen_requested) {
 	sprintf(title, "gstplay %s", video_filename);
 	window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 	gtk_window_set_title(GTK_WINDOW(window), title);
-#if !GTK_CHECK_VERSION(3, 0, 0)
+#if !GTK_CHECK_VERSION(3, 0, 0) && 0
 	// For GTK+ 3, disabling double buffering causes corruption in the menu bar,
 	// so leave it enabled.
+	// For GTK+ 2, disabling double buffering causes flickering in the status bar.
 	gtk_widget_set_double_buffered(window, FALSE);
 #endif
 	g_signal_connect(G_OBJECT(window), "key-press-event",
@@ -959,9 +1215,11 @@ gboolean full_screen_requested) {
 	g_signal_connect(G_OBJECT(window), "destroy", G_CALLBACK(destroy_cb), loop);
 
 	create_menus(loop);
+	create_status_bar();
 
 	video_window = gtk_drawing_area_new();
-	g_signal_connect(video_window, "realize", G_CALLBACK(video_window_realize_cb), NULL);
+	g_signal_connect(G_OBJECT(video_window), "realize",
+		G_CALLBACK(video_widget_realize_cb), NULL);
 #if GTK_CHECK_VERSION(3, 0, 0)
 	g_signal_connect(G_OBJECT(video_window), "draw",
 		G_CALLBACK(video_window_draw_cb), NULL);
@@ -977,9 +1235,10 @@ gboolean full_screen_requested) {
 #else
 	GtkWidget *menu_vbox = gtk_vbox_new(FALSE, 0);
 #endif
-	// Add the menu and the video window to the vbox.
+	// Add the menu, video window, and status bar to the vbox.
 	gtk_box_pack_start(GTK_BOX(menu_vbox), menu_bar, FALSE, FALSE, 0);
 	gtk_box_pack_start(GTK_BOX(menu_vbox), video_window, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(menu_vbox), status_bar, FALSE, FALSE, 0);
 	// Add the vbox to the window.
 	gtk_container_add(GTK_CONTAINER(window), menu_vbox);
 
@@ -989,19 +1248,21 @@ gboolean full_screen_requested) {
 		GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL, GTK_STOCK_OPEN, GTK_RESPONSE_ACCEPT,
 		NULL);
 
-	/* Set size request and realize window. */
-	gtk_widget_set_size_request(video_window, width, height);
+	/* Set the default size. */
+	gtk_window_set_default_size(GTK_WINDOW(window), width, height);
+	gtk_widget_show_all(window);
+	resize_video_window(width, height, FALSE);
 #if GTK_CHECK_VERSION(3, 0, 0)
 	GdkRGBA color;
 	gdk_rgba_parse(&color, "black");
 	gtk_widget_override_background_color(video_window, GTK_STATE_NORMAL, &color);
+	gtk_widget_override_color(video_window, GTK_STATE_NORMAL, &color);
 #else
 	GdkColor color;
 	gdk_color_parse("black", &color);
 	gtk_widget_modify_bg(video_window, GTK_STATE_NORMAL, &color);
 #endif
 	gtk_widget_show_all(window);
-	gtk_widget_realize(window);
 	full_screen = 0;
 	if (full_screen_requested) {
 		enable_full_screen();

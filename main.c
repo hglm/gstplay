@@ -18,6 +18,7 @@
 
 */
 
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -25,6 +26,7 @@
 #include <glib.h>
 #include <glib-unix.h>
 #include <sys/wait.h>
+#include <sched.h>
 #include <gst/gst.h>
 #include "gstplay.h"
 
@@ -53,8 +55,9 @@ typedef enum {
 #define DECODEBIN_STR "decodebin2"
 #endif
 
-enum { DECODE_PATH_PLAYBIN = 0, DECODE_PATH_DECODEBIN, DECODE_PATH_MP4AVI,
-	DECODE_PATH_MP4QT, DECODE_PATH_H264QT };
+enum { DECODE_PATH_PLAYBIN = 0, DECODE_PATH_DECODEBIN, 
+	DECODE_PATH_MP4AVI, DECODE_PATH_MP4QT, DECODE_PATH_H264QT,
+	DECODE_PATH_MSMP4AVI };
 enum { VIDEO_SINK_AUTO = 0, VIDEO_SINK_XIMAGE, VIDEO_SINK_XVIMAGE };
 
 /* Command line settings that otherwise are not included in the general configuration. */
@@ -102,6 +105,7 @@ static void usage(int argc, char *argv[]) {
 		"    --mp4avi          Use the MPEG4 decode path for .avi files.\n"
 		"    --mp4qt           Use the MPEG4 decode path for .mp4/mov files.\n"
 		"    --h264qt          Use the H.264 decode path for .mov files.\n"
+		"    --msmp4avi        Use the MPEG4 decode path for Microsoft .avi files (using avdec_msmpegv2).\n"
 		);
 }
 
@@ -202,6 +206,36 @@ static gboolean intr_handler(gpointer user_data) {
 	return FALSE;
 }
 
+/* Scheduler */
+
+void main_set_real_time_scheduling_policy() {
+	return;	// Disabled.
+	struct sched_param param;
+	param.sched_priority = 10;
+	if (sched_setscheduler(0, SCHED_RR, &param) == - 1) {
+		printf("gstplay: Could not set real-time scheduling priority.\n");
+	}
+	cpu_set_t cpu_set;
+	CPU_ZERO(&cpu_set);
+	CPU_SET(0, &cpu_set);
+	if (sched_setaffinity(getpid(), sizeof(cpu_set_t), &cpu_set) == - 1)
+		printf("gstplay: Could not set scheduler affinity.\n");
+}
+
+void main_set_normal_scheduling_policy() {
+	return;	// Disabled.
+	struct sched_param param;
+	param.sched_priority = 0;
+	if (sched_setscheduler(0, SCHED_OTHER, &param) == - 1) {
+		printf("gstplay: Could not set normal scheduling priority.\n");
+	}
+}
+
+void main_thread_yield() {
+	if (sched_yield())
+		printf("gstplay: sched_yield failed.\n");
+}
+
 const char *main_create_pipeline(const char *uri, const char *video_title_filename) {
 	const char *adjusted_video_sink;
 	const char *video_sink = config_get_current_video_sink();
@@ -230,18 +264,29 @@ const char *main_create_pipeline(const char *uri, const char *video_title_filena
 	if (decode_path != DECODE_PATH_DECODEBIN & decode_path != DECODE_PATH_PLAYBIN) {
 		if (!config_video_only())
 			glue = "demuxer. ! queue ! ";
-		if (decode_path == DECODE_PATH_MP4AVI)
+		if (decode_path == DECODE_PATH_MSMP4AVI)
+			sprintf(s, "%s ! "
+				"avidemux name=demuxer  demuxer. ! "
+				"queue !"
+				"avdec_msmpeg4v2 ! "
+//				"priority nice=-10 ! "
+//				"queue max-size-buffers=0 max-size-time=1000000000 min-size-time=500000000 ! "
+				"queue !"
+//				"priority nice=-10 ! "
+				"%s  %s%s",
+				source, adjusted_video_sink, glue, audio_pipeline);
+		else if (decode_path == DECODE_PATH_MP4AVI)
 			sprintf(s, "%s ! avidemux name=demuxer  "
 				"demuxer. ! queue ! avdec_mpeg4 ! %s  %s%s", source,
-				video_title_filename, adjusted_video_sink, glue, audio_pipeline);
+				adjusted_video_sink, glue, audio_pipeline);
 		else if (decode_path == DECODE_PATH_MP4QT)
 			sprintf(s, "%s ! qtdemux name=demuxer  "
 				"demuxer. ! queue ! avdec_mpeg4 ! %s  %s%s", source,
-				video_title_filename, adjusted_video_sink, glue, audio_pipeline);
+				adjusted_video_sink, glue, audio_pipeline);
 		else if (decode_path == DECODE_PATH_H264QT)
 			sprintf(s, "%s ! qtdemux name=demuxer  "
 				"demuxer. ! queue ! avdec_h264 ! %s  %s%s", source,
-				video_title_filename, adjusted_video_sink, glue, audio_pipeline);
+				adjusted_video_sink, glue, audio_pipeline);
 	}
 	else if (decode_path == DECODE_PATH_DECODEBIN) {
 		if (!config_video_only())
@@ -390,6 +435,11 @@ int main(int argc, char *argv[]) {
 		}
 		if (strcasecmp(argv[argi], "--h264qt") == 0) {
 			decode_path = DECODE_PATH_H264QT;
+			argi++;
+			continue;
+		}
+		if (strcasecmp(argv[argi], "--msmp4avi") == 0) {
+			decode_path = DECODE_PATH_MSMP4AVI;
 			argi++;
 			continue;
 		}

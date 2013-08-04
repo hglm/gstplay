@@ -16,7 +16,7 @@ section on console usage.
 
 This is an early development release that has not yet been tested on a
 wide variety of media formats (only with mp4-type files on disk). Things
-like playlists and sliders and not (yet) supported.
+like playlists are not (yet) supported.
 
 *** Requirements ***
 
@@ -78,7 +78,7 @@ It is also possible enable console mode from an X terminal with the --nogui opti
 - When going fullscreen with GTK+ 3 an ugly transition with a white area is
   visible (should at least be black).
 
-- Using gstreamer 1.0 it possible to use a more elegant way to hook the window ID
+- Using gstreamer 1.0 it is possible to use a more elegant way to hook the window ID
   than the current method.
 
 - At the moment when a media file is specified on the command line in GUI

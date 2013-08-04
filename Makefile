@@ -19,7 +19,7 @@ GTK_PKG_CONFIG_LFLAGS=`pkg-config --libs gtk+-$(GTK_MAJOR).0`
 MODULE_OBJECTS = main.o gui.o gstreamer.o config.o
 
 gstplay : $(MODULE_OBJECTS)
-	gcc -g -o gstplay $(MODULE_OBJECTS) $(GTK_PKG_CONFIG_LFLAGS) $(GST_PKG_CONFIG_LFLAGS)
+	gcc -O -o gstplay $(MODULE_OBJECTS) $(GTK_PKG_CONFIG_LFLAGS) $(GST_PKG_CONFIG_LFLAGS)
 
 gui.o : gui.c
 	$(CC) -c $(CFLAGS) $(GTK_PKG_CONFIG_CFLAGS) $< -o $@
