@@ -151,6 +151,7 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
 		if (format == GST_FORMAT_BUFFERS)  {
 			GstElement *src = GST_MESSAGE_SRC(msg);
 			char *name = gst_element_get_name(src);
+			stats_report_dropped_frames_cb(src, name, processed, dropped);
 //			printf("gstplay: %s reports %lu out of %lu frames (%d%%) dropped.\n",
 //				name,
 //				dropped, processed + dropped,
@@ -428,6 +429,8 @@ gboolean gstreamer_run_pipeline(GMainLoop *loop, const char *s, StartupState sta
 	gst_iterator_foreach(iterator, for_each_pipeline_element, NULL);
 	gst_iterator_free(iterator);
 
+	stats_reset();
+
 	gst_element_set_state(pipeline, GST_STATE_READY);
 
 	state_change_to_playing_already_occurred = FALSE;
@@ -475,6 +478,10 @@ void gstreamer_destroy_pipeline() {
 	}
 	g_value_unset(&value);
 	g_list_free(inform_pipeline_destroyed_cb_list);
+
+	stats_reset();
+
+	gui_set_window_title("gstplay");
 }
 
 void gstreamer_add_pipeline_destroyed_cb(GCallback cb_func, gpointer user_data) {

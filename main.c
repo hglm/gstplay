@@ -326,7 +326,11 @@ const char *main_create_pipeline(const char *uri, const char *video_title_filena
 		gstreamer_inform_playbin_used(TRUE);
 	}
 	current_uri = uri;
-	current_video_title_filename;
+	current_video_title_filename = video_title_filename;
+	char *str;
+	str = g_strdup_printf("gstplay %s", current_video_title_filename);
+	gui_set_window_title(str);
+	g_free(str);
 	return s;
 }
 
@@ -514,7 +518,7 @@ int main(int argc, char *argv[]) {
 		/* Run in interactive mode. */
 		loop = g_main_loop_new(NULL, FALSE);
 		if (width == 0)
-			width = 720;
+			width = 1024;
 		if (height == 0)
 			height = 576;
 		gui_setup_window(loop, "", width, height, full_screen);

@@ -149,6 +149,7 @@ gpointer data) {
 guintptr gui_get_video_window_handle() {
 	return video_window_handle;
 }
+
 void gui_status_bar_pipeline_destroyed_cb(gpointer data, GtkWidget *widget) {
 	/* Remove the periodic time-out to update the position slider. */
 	g_source_remove(update_status_bar_cb_id);
@@ -159,6 +160,10 @@ void gui_play_start_cb() {
 	/* Add a periodic time-out to update the position slider. */
 	update_status_bar_cb_id = g_timeout_add_seconds(1, gui_update_status_bar_cb, NULL);
 	gstreamer_add_pipeline_destroyed_cb(gui_status_bar_pipeline_destroyed_cb, status_bar);
+}
+
+void gui_set_window_title(const char *title) {
+	gtk_window_set_title(GTK_WINDOW(window), title);
 }
 
 static void enable_full_screen() {
@@ -745,6 +750,63 @@ static void menu_item_about_activate_cb(GtkMenuItem *menu_item, gpointer data) {
 	gtk_widget_destroy(dialog);
 }
 
+// Statistics window.
+
+GtkWidget *cpu_utilization_text_view;
+GtkWidget *dropped_frames_text_view;
+guint stats_dialog_update_cb_id;
+
+/* Replace the text of a text view, and apply an existing tag to all text. */
+
+static void replace_text_view_text(GtkWidget *text_view, const char *tag_name,
+const char *text) {
+	GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(text_view));
+	GtkTextIter end_iter;
+	gtk_text_buffer_get_end_iter(buffer, &end_iter);
+	GtkTextIter start_iter;
+	gtk_text_buffer_get_iter_at_offset(buffer, &start_iter, 0);
+	gtk_text_buffer_delete(buffer, &start_iter, &end_iter);
+	gtk_text_buffer_insert(buffer, &start_iter, text, -1);
+	gtk_text_buffer_get_iter_at_offset(buffer, &start_iter, 0);
+	gtk_text_buffer_get_end_iter(buffer, &end_iter);
+	gtk_text_buffer_apply_tag_by_name(buffer, tag_name, &start_iter, &end_iter);
+}
+
+static gboolean stats_dialog_update_cb(gpointer data) {
+	char *s;
+	s = stats_get_cpu_utilization_str();
+	replace_text_view_text(cpu_utilization_text_view, "my_font", s);
+	g_free(s);
+	s = stats_get_dropped_frames_str();
+	replace_text_view_text(dropped_frames_text_view, "my_font", s);
+	g_free(s);
+	return TRUE;
+}
+
+static void menu_item_stats_activate_cb(GtkMenuItem *menu_item, GtkDialog *dialog) {
+	gtk_widget_show_all(GTK_WIDGET(dialog));
+	stats_dialog_update_cb_id = g_timeout_add(200, stats_dialog_update_cb, NULL);
+	stats_reset();
+	stats_set_enabled(TRUE);
+}
+
+static void stats_dialog_response_cb(GtkDialog *dialog, gpointer data) {
+	g_source_remove(stats_dialog_update_cb_id);
+	gtk_widget_hide(GTK_WIDGET(dialog));
+	stats_set_enabled(FALSE);
+}
+
+static void stats_reset_button_clicked_cb(GtkButton *button, gpointer data) {
+	stats_reset();
+}
+
+static void stats_thread_info_check_button_toggled_cb(GtkToggleButton *button, gpointer data ) {
+	if (gtk_toggle_button_get_active(button))
+		stats_set_thread_info(TRUE);
+	else
+		stats_set_thread_info(FALSE);
+}
+
 // Status bar.
 
 // Number of milliseconds to play for after a scrub seek.
@@ -1026,6 +1088,44 @@ static GtkWidget *create_color_balance_dialog() {
 
 #endif
 
+static GtkWidget *create_stats_dialog() {
+	GtkWidget *dialog = gtk_dialog_new_with_buttons(
+		"Performance Statistics",
+		GTK_WINDOW(window), GTK_DIALOG_DESTROY_WITH_PARENT,
+		GTK_STOCK_CLOSE, GTK_RESPONSE_ACCEPT,
+		NULL);
+	GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+	cpu_utilization_text_view = gtk_text_view_new();
+	GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(cpu_utilization_text_view));
+	gtk_text_buffer_create_tag(buffer, "my_font", "family", "monospace", NULL);
+ 	dropped_frames_text_view = gtk_text_view_new();
+	buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(dropped_frames_text_view));
+	gtk_text_buffer_create_tag(buffer, "my_font", "family", "monospace", NULL);
+	GtkWidget *thread_info_check_button =
+		gtk_check_button_new_with_label("Show thread info");
+	g_signal_connect(G_OBJECT(thread_info_check_button), "toggled", G_CALLBACK(
+		stats_thread_info_check_button_toggled_cb), NULL);
+#if GTK_CHECK_VERSION(3, 0, 0)
+	GtkWidget *vbox1 = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+#else
+	GtkWidget *vbox1 = gtk_vbox_new(FALSE, 0);
+#endif
+	gtk_container_add(GTK_CONTAINER(vbox1), cpu_utilization_text_view);
+	gtk_container_add(GTK_CONTAINER(vbox1), thread_info_check_button);
+	GtkWidget *space_label = gtk_label_new("");
+	gtk_container_add(GTK_CONTAINER(vbox1), space_label);
+	gtk_container_add(GTK_CONTAINER(vbox1), dropped_frames_text_view);
+	gtk_container_add(GTK_CONTAINER(content), vbox1);
+	GtkWidget *stats_reset_button = gtk_button_new_with_label("Reset");
+	g_signal_connect(G_OBJECT(stats_reset_button), "clicked", G_CALLBACK(
+		stats_reset_button_clicked_cb), NULL);
+	GtkWidget *action_area = gtk_dialog_get_action_area(GTK_DIALOG(dialog));
+	gtk_container_add(GTK_CONTAINER(action_area), stats_reset_button);
+	g_signal_connect(dialog, "response", G_CALLBACK(stats_dialog_response_cb),
+		dialog);
+	return dialog;
+}
+
 static void create_menus(GMainLoop *loop) {
 	GtkWidget *preferences_dialog = create_preferences_dialog();
 
@@ -1033,6 +1133,8 @@ static void create_menus(GMainLoop *loop) {
 	// Create the color balance dialog
 	GtkWidget *color_balance_dialog = create_color_balance_dialog();
 #endif
+
+	GtkWidget *stats_dialog = create_stats_dialog();
 
 	// Create the menu bar.
 	menu_bar = gtk_menu_bar_new();
@@ -1151,6 +1253,16 @@ static void create_menus(GMainLoop *loop) {
 	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), color_item);
 #endif
 
+	GtkWidget *menu_item_stats = gtk_menu_item_new_with_label("Open performance statistics");
+	g_signal_connect(G_OBJECT(menu_item_stats), "activate",
+		G_CALLBACK(menu_item_stats_activate_cb), stats_dialog);
+	GtkWidget *stats_menu = gtk_menu_new();
+	gtk_menu_shell_append(GTK_MENU_SHELL(stats_menu), menu_item_stats);
+	// Create the stats menu.
+	GtkWidget *stats_item = gtk_menu_item_new_with_label("Statistics");
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(stats_item), stats_menu);
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), stats_item);
+
 	GtkWidget *menu_item_about = gtk_menu_item_new_with_label("About");
 	g_signal_connect(G_OBJECT(menu_item_about), "activate",
 		G_CALLBACK(menu_item_about_activate_cb), NULL);
@@ -1200,10 +1312,10 @@ void gui_setup_window(GMainLoop *loop, const char *video_filename, int width, in
 gboolean full_screen_requested) {
 
 	/* Set up the window. */
-	char *title = malloc(strlen(video_filename) + 32);
-	sprintf(title, "gstplay %s", video_filename);
 	window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-	gtk_window_set_title(GTK_WINDOW(window), title);
+	char *title = g_strdup_printf(title, "gstplay %s", video_filename);
+	gui_set_window_title(title);
+	g_free(title);
 #if !GTK_CHECK_VERSION(3, 0, 0) && 0
 	// For GTK+ 3, disabling double buffering causes corruption in the menu bar,
 	// so leave it enabled.

@@ -16,7 +16,7 @@ gstreamer-video-$(GST_VERSION) $(GST_PKG_CONFIG_LIBS_EXTRA)`
 GTK_PKG_CONFIG_CFLAGS=`pkg-config --cflags gtk+-$(GTK_MAJOR).0`
 GTK_PKG_CONFIG_LFLAGS=`pkg-config --libs gtk+-$(GTK_MAJOR).0`
 
-MODULE_OBJECTS = main.o gui.o gstreamer.o config.o
+MODULE_OBJECTS = main.o gui.o gstreamer.o config.o stats.o
 
 gstplay : $(MODULE_OBJECTS)
 	gcc -O -o gstplay $(MODULE_OBJECTS) $(GTK_PKG_CONFIG_LFLAGS) $(GST_PKG_CONFIG_LFLAGS)

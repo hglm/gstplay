@@ -73,6 +73,7 @@ extern gdouble config_get_uri_color_balance_default(int channel);
 extern gboolean gui_init(int *argcp, char **argvp[]);
 extern void gui_setup_window(GMainLoop *loop, const char *video_filename, int video_width,
 	int video_height, gboolean full_screen);
+extern void gui_set_window_title(const char *title);
 extern guintptr gui_get_video_window_handle();
 extern void gui_get_render_rectangle(int *x, int *y, int *w, int *h);
 extern void gui_get_version(guint *major, guint *minor, guint *micro);
@@ -122,3 +123,13 @@ extern gdouble gstreamer_get_color_balance(int channel);
 extern void gstreamer_add_pipeline_destroyed_cb(GCallback cb_func, gpointer user_data);
 extern void gstreamer_set_default_settings();
 extern void gstreamer_refresh_frame();
+
+/* stats.c */
+
+extern void stats_set_enabled(gboolean status);
+extern void stats_set_thread_info(gboolean status);
+extern void stats_report_dropped_frames_cb(gpointer element, const char *name,
+guint64 processed, guint64 dropped);
+extern void stats_reset();
+extern gchar *stats_get_cpu_utilization_str();
+extern gchar *stats_get_dropped_frames_str();
