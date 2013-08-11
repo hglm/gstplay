@@ -292,7 +292,6 @@ int *video_height) {
 	g_main_loop_unref(loop);
 }
 
-
 static void read_video_props(GstCaps *caps, const char **formatp, int *widthp, int *heightp,
 int *framerate_numeratorp, int *framerate_denomp, int *pixel_aspect_ratio_nump,
 int *pixel_aspect_ratio_denomp) {
@@ -308,11 +307,11 @@ int *pixel_aspect_ratio_denomp) {
 	int pixel_aspect_ratio_denom = 0;
 
 	const char *format = gst_structure_get_string(str, "format");
-	gst_structure_get_int(str, "width", widthp);
-	gst_structure_get_int(str, "height", heightp);
-	gst_structure_get_fraction(str, "pixel-aspect-ratio", pixel_aspect_ratio_nump,
-		pixel_aspect_ratio_denomp);
-	gst_structure_get_fraction(str, "framerate", framerate_numeratorp, framerate_denomp);
+	gst_structure_get_int(str, "width", &width);
+	gst_structure_get_int(str, "height", &height);
+	gst_structure_get_fraction(str, "pixel-aspect-ratio", &pixel_aspect_ratio_num,
+		&pixel_aspect_ratio_denom);
+	gst_structure_get_fraction(str, "framerate", &framerate_numerator, &framerate_denom);
 
 	if (format != NULL)
 		*formatp = format;
@@ -912,3 +911,119 @@ void gstreamer_refresh_frame() {
 	}
 }
 
+// Trick mode functions.
+
+static gdouble playback_rate = 1.0;
+
+// Look up the video-sink property from playbin.
+
+static GstElement *get_video_sink() {
+	GstElement *video_sink;
+	g_object_get(pipeline, "video-sink", &video_sink, NULL);
+	return video_sink;
+}
+
+// Update the playback speed with a seek event.
+
+static void update_playback_speed() {
+	gboolean error;
+	gint64 pos = gstreamer_get_position(&error);
+	if (error)
+		return;
+	GstElement *video_sink = get_video_sink();
+	if (!video_sink)
+		return;
+	GstEvent *seek_event;
+	if (playback_rate > 0)
+		seek_event = gst_event_new_seek(playback_rate, GST_FORMAT_TIME,
+			GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE,
+			GST_SEEK_TYPE_SET, pos, GST_SEEK_TYPE_NONE, 0);
+	else
+		seek_event = gst_event_new_seek (playback_rate, GST_FORMAT_TIME,
+			GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE,
+			GST_SEEK_TYPE_SET, 0, GST_SEEK_TYPE_SET, pos);
+	gst_element_send_event (video_sink, seek_event);
+}
+
+// Skip to the next frame when in PAUSED mode.
+
+void gstreamer_next_frame() {
+	GstElement *video_sink = get_video_sink();
+	if (!video_sink)
+		return;
+	gst_element_send_event (video_sink,
+		gst_event_new_step (GST_FORMAT_BUFFERS, 1, playback_rate, TRUE, FALSE));
+}
+
+static gboolean get_framerate(double *frameratep) {
+	int framerate_numerator = 0;
+	int framerate_denom = 0;
+	GList *list = g_list_first(created_pads_list);
+	while (list != NULL) {
+		GstPad *pad = list->data;
+		GstCaps *caps = gst_pad_get_current_caps(pad);
+		if (GST_IS_CAPS(caps)) {
+			const GstStructure *str;
+			if (!gst_caps_is_fixed(caps))
+				continue;
+			str = gst_caps_get_structure(caps, 0);
+			gst_structure_get_fraction(str, "framerate", &framerate_numerator,
+				&framerate_denom);
+			if (framerate_denom != 0)
+				break;
+		}
+		list = g_list_next(list);
+	}
+	if (framerate_denom == 0)
+		return FALSE;
+	*frameratep = (double)framerate_numerator / framerate_denom;
+	return TRUE;
+}
+
+
+void gstreamer_previous_frame() {
+	gboolean error;
+	gint64 pos = gstreamer_get_position(&error);
+	if (!error) {
+		double rate;
+		if (!get_framerate(&rate))
+			return;
+		pos -= GST_SECOND / rate;
+		if (pos >= 0) {
+			if (!gst_element_seek_simple(pipeline, GST_FORMAT_TIME,
+			GST_SEEK_FLAG_FLUSH, pos)) {
+				printf("gstplay: Seek failed!.n");
+			}
+		}
+	}
+}
+
+void gstreamer_increase_playback_speed() {
+	playback_rate *= 2.0;
+	update_playback_speed();
+}
+
+void gstreamer_decrease_playback_speed() {
+	playback_rate *= 0.5;
+	update_playback_speed();
+}
+
+// This function is currently not used, reverse playback doesn't work well
+// with other parts of the interface.
+
+void gstreamer_set_playback_speed_reverse(gboolean enabled) {
+	if (enabled) {
+		if (playback_rate > 0)
+			playback_rate = - playback_rate;
+	}
+	else {
+		if (playback_rate < 0)
+			playback_rate = - playback_rate;
+	}
+	update_playback_speed();
+}
+
+void gstreamer_reset_playback_speed() {
+	playback_rate = 1.0;
+	update_playback_speed();
+}

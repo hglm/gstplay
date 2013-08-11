@@ -123,6 +123,12 @@ extern gdouble gstreamer_get_color_balance(int channel);
 extern void gstreamer_add_pipeline_destroyed_cb(GCallback cb_func, gpointer user_data);
 extern void gstreamer_set_default_settings();
 extern void gstreamer_refresh_frame();
+extern void gstreamer_next_frame();
+extern void gstreamer_previous_frame();
+extern void gstreamer_increase_playback_speed();
+extern void gstreamer_decrease_playback_speed();
+extern void gstreamer_set_playback_speed_reverse(gboolean state);
+extern void gstreamer_reset_playback_speed();
 
 /* stats.c */
 

@@ -3,7 +3,7 @@
 GTK_MAJOR=3
 GST_VERSION=1.0
 
-CFLAGS = -std=gnu99 -O2
+CFLAGS=-std=gnu99 -O2
 GLIB_PKG_CONFIG_CFLAGS=`pkg-config --cflags glib-2.0`
 ifeq ($(GST_VERSION), 0.10)
 GST_PKG_CONFIG_LIBS_EXTRA= --libs gstreamer-interfaces-0.10

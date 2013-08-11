@@ -724,6 +724,45 @@ void color_balance_dialog_response_cb(GtkDialog *dialog, gpointer data) {
 
 #endif
 
+static void menu_item_increase_playback_speed_activate_cb(GtkMenuItem *menu_item, gpointer data) {
+	if (gstreamer_no_pipeline())
+		return;
+	gstreamer_increase_playback_speed();
+}
+
+static void menu_item_decrease_playback_speed_activate_cb(GtkMenuItem *menu_item, gpointer data) {
+	if (gstreamer_no_pipeline())
+		return;
+	gstreamer_decrease_playback_speed();
+}
+
+static void check_menu_item_reverse_activate_cb(GtkCheckMenuItem *check_menu_item, gpointer data) {
+	if (gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(check_menu_item)))
+		gstreamer_set_playback_speed_reverse(TRUE);
+	else
+		gstreamer_set_playback_speed_reverse(FALSE);
+}
+
+static void menu_item_reset_playback_speed_activate_cb(GtkMenuItem *menu_item, gpointer data) {
+	if (gstreamer_no_pipeline())
+		return;
+	gstreamer_reset_playback_speed();
+}
+
+static void menu_item_next_frame_activate_cb(GtkMenuItem *menu_item, gpointer data) {
+	if (gstreamer_no_pipeline())
+		return;
+	gstreamer_pause();
+	gstreamer_next_frame();
+}
+
+static void menu_item_previous_frame_activate_cb(GtkMenuItem *menu_item, gpointer data) {
+	if (gstreamer_no_pipeline())
+		return;
+	gstreamer_pause();
+	gstreamer_previous_frame();
+}
+
 static void menu_item_about_activate_cb(GtkMenuItem *menu_item, gpointer data) {
 	guint gst_major, gst_minor, gst_micro;
 	gstreamer_get_version(&gst_major, &gst_minor, &gst_micro);
@@ -1252,6 +1291,42 @@ static void create_menus(GMainLoop *loop) {
 	gtk_menu_item_set_submenu(GTK_MENU_ITEM(color_item), color_menu);
 	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), color_item);
 #endif
+
+	GtkWidget *menu_item_increase_playback_speed =
+		gtk_menu_item_new_with_label("Increase playback speed");
+	g_signal_connect(G_OBJECT(menu_item_increase_playback_speed), "activate",
+		G_CALLBACK(menu_item_increase_playback_speed_activate_cb), NULL);
+	GtkWidget *menu_item_decrease_playback_speed =
+		gtk_menu_item_new_with_label("Decrease playback speed");
+	g_signal_connect(G_OBJECT(menu_item_decrease_playback_speed), "activate",
+		G_CALLBACK(menu_item_decrease_playback_speed_activate_cb), NULL);
+#if 0
+	GtkWidget *check_menu_item_reverse = gtk_check_menu_item_new_with_label("Reverse");
+	g_signal_connect(G_OBJECT(check_menu_item_reverse), "activate",
+		G_CALLBACK(check_menu_item_reverse_activate_cb), NULL);
+	gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(check_menu_item_reverse), FALSE);
+#endif
+	GtkWidget *menu_item_reset_playback_speed =
+		gtk_menu_item_new_with_label("Reset playback speed");
+	g_signal_connect(G_OBJECT(menu_item_reset_playback_speed), "activate",
+		G_CALLBACK(menu_item_reset_playback_speed_activate_cb), NULL);
+	GtkWidget *menu_item_next_frame = gtk_menu_item_new_with_label("Next frame");
+	g_signal_connect(G_OBJECT(menu_item_next_frame), "activate",
+		G_CALLBACK(menu_item_next_frame_activate_cb), NULL);
+	GtkWidget *menu_item_previous_frame = gtk_menu_item_new_with_label("Previous frame");
+	g_signal_connect(G_OBJECT(menu_item_previous_frame), "activate",
+		G_CALLBACK(menu_item_previous_frame_activate_cb), NULL);
+	GtkWidget *trick_menu = gtk_menu_new();
+	gtk_menu_shell_append(GTK_MENU_SHELL(trick_menu), menu_item_increase_playback_speed);
+	gtk_menu_shell_append(GTK_MENU_SHELL(trick_menu), menu_item_decrease_playback_speed);
+//	gtk_menu_shell_append(GTK_MENU_SHELL(trick_menu), check_menu_item_reverse);
+	gtk_menu_shell_append(GTK_MENU_SHELL(trick_menu), menu_item_reset_playback_speed);
+	gtk_menu_shell_append(GTK_MENU_SHELL(trick_menu), menu_item_next_frame);
+	gtk_menu_shell_append(GTK_MENU_SHELL(trick_menu), menu_item_previous_frame);
+	// Create the trick menu.
+	GtkWidget *trick_item = gtk_menu_item_new_with_label("Trick");
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(trick_item), trick_menu);
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), trick_item);
 
 	GtkWidget *menu_item_stats = gtk_menu_item_new_with_label("Open performance statistics");
 	g_signal_connect(G_OBJECT(menu_item_stats), "activate",
