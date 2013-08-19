@@ -200,6 +200,10 @@ static void set_audio_volume(double volume);
 static void increase_audio_volume(double volume);
 static void decrease_audio_volume(double volume);
 static void toggle_mute();
+static void menu_item_play_activate_cb(GtkMenuItem *menu_item, gpointer data);
+static void menu_item_pause_activate_cb(GtkMenuItem *menu_item, gpointer data);
+static void menu_item_next_frame_activate_cb(GtkMenuItem *menu_item, gpointer data);
+static void menu_item_previous_frame_activate_cb(GtkMenuItem *menu_item, gpointer data);
 
 static gboolean key_press_cb(GtkWidget * widget, GdkEventKey * event, gpointer data) {
         switch (event->keyval) {
@@ -214,12 +218,20 @@ static gboolean key_press_cb(GtkWidget * widget, GdkEventKey * event, gpointer d
 		else
 			disable_full_screen();
 		break;
-	case GDK_n:
-	case GDK_N:
-		forward_stream_by((gint64)60 * 1000000000);
+        case GDK_Return:
+	case GDK_KP_Enter:
+		menu_item_play_activate_cb(NULL, NULL);
 		break;
 	case GDK_p:
 	case GDK_P:
+		menu_item_pause_activate_cb(NULL, NULL);
+		break;
+	case GDK_bracketright:
+	case GDK_braceright:
+		forward_stream_by((gint64)60 * 1000000000);
+		break;
+	case GDK_bracketleft:
+	case GDK_braceleft:
 		rewind_stream_by((gint64)60 * 1000000000);
 		break;
 	case GDK_period:
@@ -249,6 +261,14 @@ static gboolean key_press_cb(GtkWidget * widget, GdkEventKey * event, gpointer d
 	case GDK_underscore:
 	case GDK_KP_Subtract:
 		decrease_audio_volume(0.05);
+		break;
+	case GDK_Right:
+	case GDK_KP_Right:
+		menu_item_next_frame_activate_cb(NULL, NULL);
+		break;
+	case GDK_Left:
+	case GDK_KP_Left:
+		menu_item_previous_frame_activate_cb(NULL, NULL);
 		break;
         }
         return TRUE;
@@ -1205,10 +1225,10 @@ static void create_menus(GMainLoop *loop) {
 	gtk_menu_item_set_submenu(GTK_MENU_ITEM(file_item), file_menu);
 	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), file_item);
 
-	GtkWidget *menu_item_play = gtk_menu_item_new_with_label("Play");
+	GtkWidget *menu_item_play = gtk_menu_item_new_with_label("Play (Enter)");
 	g_signal_connect(G_OBJECT(menu_item_play), "activate",
 		G_CALLBACK(menu_item_play_activate_cb), NULL);
-	GtkWidget *menu_item_pause = gtk_menu_item_new_with_label("Pause");
+	GtkWidget *menu_item_pause = gtk_menu_item_new_with_label("Pause (P)");
 	g_signal_connect(G_OBJECT(menu_item_pause), "activate",
 		G_CALLBACK(menu_item_pause_activate_cb), NULL);
 	GtkWidget *menu_item_rewind = gtk_menu_item_new_with_label("Rewind (Home)");
@@ -1217,10 +1237,10 @@ static void create_menus(GMainLoop *loop) {
 	GtkWidget *menu_item_seek_to_end = gtk_menu_item_new_with_label("Seek to End (End)");
 	g_signal_connect(G_OBJECT(menu_item_seek_to_end), "activate",
 		G_CALLBACK(menu_item_seek_to_end_activate_cb), loop);
-	GtkWidget *menu_item_plus_1min = gtk_menu_item_new_with_label("+ 1 min (N)");
+	GtkWidget *menu_item_plus_1min = gtk_menu_item_new_with_label("+ 1 min ([)");
 	g_signal_connect(G_OBJECT(menu_item_plus_1min), "activate",
 		G_CALLBACK(menu_item_plus_1min_activate_cb), loop);
-	GtkWidget *menu_item_min_1min = gtk_menu_item_new_with_label("- 1 min (P)");
+	GtkWidget *menu_item_min_1min = gtk_menu_item_new_with_label("- 1 min (])");
 	g_signal_connect(G_OBJECT(menu_item_min_1min), "activate",
 		G_CALLBACK(menu_item_min_1min_activate_cb), loop);
 	GtkWidget *menu_item_plus_10sec = gtk_menu_item_new_with_label("+ 10 sec (>)");
@@ -1310,10 +1330,10 @@ static void create_menus(GMainLoop *loop) {
 		gtk_menu_item_new_with_label("Reset playback speed");
 	g_signal_connect(G_OBJECT(menu_item_reset_playback_speed), "activate",
 		G_CALLBACK(menu_item_reset_playback_speed_activate_cb), NULL);
-	GtkWidget *menu_item_next_frame = gtk_menu_item_new_with_label("Next frame");
+	GtkWidget *menu_item_next_frame = gtk_menu_item_new_with_label("Next frame (->)");
 	g_signal_connect(G_OBJECT(menu_item_next_frame), "activate",
 		G_CALLBACK(menu_item_next_frame_activate_cb), NULL);
-	GtkWidget *menu_item_previous_frame = gtk_menu_item_new_with_label("Previous frame");
+	GtkWidget *menu_item_previous_frame = gtk_menu_item_new_with_label("Previous frame (<-)");
 	g_signal_connect(G_OBJECT(menu_item_previous_frame), "activate",
 		G_CALLBACK(menu_item_previous_frame_activate_cb), NULL);
 	GtkWidget *trick_menu = gtk_menu_new();
