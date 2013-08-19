@@ -266,10 +266,12 @@ static gboolean key_press_cb(GtkWidget * widget, GdkEventKey * event, gpointer d
 	case GDK_KP_Right:
 		menu_item_next_frame_activate_cb(NULL, NULL);
 		break;
+#if 0
 	case GDK_Left:
 	case GDK_KP_Left:
 		menu_item_previous_frame_activate_cb(NULL, NULL);
 		break;
+#endif
         }
         return TRUE;
 }
@@ -878,6 +880,7 @@ static gboolean state_was_playing;
 static gint64 current_seek_target_position;
 static gint64 next_seek_target_position;
 static gint64 cached_duration;
+static gboolean scrub_seek_active = FALSE;
 
 static void position_slider_value_changed_cb(GtkScale *scale, gpointer data) {
 	if (gstreamer_no_pipeline())
@@ -948,7 +951,7 @@ static gboolean end_scrub(gpointer data) {
 
 void gui_state_change_to_playing_cb() {
 	// When doing a scrub seek, play for SCRUB_TIME ms.
-	if (position_slider_value_changed_cb_id == 0) {
+	if (scrub_seek_active && position_slider_value_changed_cb_id == 0) {
 		if (seek_timeout_id == 0) {
 			seek_timeout_id = g_timeout_add(SCRUB_TIME,
 				(GSourceFunc)end_scrub, NULL);
@@ -988,6 +991,7 @@ gpointer data) {
 		position_slider_value_changed_cb_id = 0;
 		state_was_playing = gstreamer_state_is_playing();
 		gstreamer_pause();
+		scrub_seek_active = TRUE;
 		// Install the scrub seek signal handler.
 		position_slider_value_changed_scrub_seek_cb_id = g_signal_connect(
 			G_OBJECT(position_slider), "value-changed",
@@ -1009,6 +1013,7 @@ gpointer data) {
 		// Reconnect the signal handler that instantly seeks when the slider value is changed.
 		position_slider_value_changed_cb_id = g_signal_connect(G_OBJECT(position_slider),
 			"value-changed", G_CALLBACK(position_slider_value_changed_cb), NULL);
+		scrub_seek_active = FALSE;
 		if (state_was_playing)
 			gstreamer_play();
 	}
@@ -1342,7 +1347,7 @@ static void create_menus(GMainLoop *loop) {
 //	gtk_menu_shell_append(GTK_MENU_SHELL(trick_menu), check_menu_item_reverse);
 	gtk_menu_shell_append(GTK_MENU_SHELL(trick_menu), menu_item_reset_playback_speed);
 	gtk_menu_shell_append(GTK_MENU_SHELL(trick_menu), menu_item_next_frame);
-	gtk_menu_shell_append(GTK_MENU_SHELL(trick_menu), menu_item_previous_frame);
+//	gtk_menu_shell_append(GTK_MENU_SHELL(trick_menu), menu_item_previous_frame);
 	// Create the trick menu.
 	GtkWidget *trick_item = gtk_menu_item_new_with_label("Trick");
 	gtk_menu_item_set_submenu(GTK_MENU_ITEM(trick_item), trick_menu);

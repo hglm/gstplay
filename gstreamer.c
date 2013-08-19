@@ -103,6 +103,7 @@ static gdouble suspended_audio_volume;
 static gboolean end_of_stream = FALSE;
 static gboolean using_playbin;
 static GList *inform_pipeline_destroyed_cb_list;
+static gboolean pause_on_state_change_to_playing = FALSE;
 
 static GstElement *find_xvimagesink();
 
@@ -183,6 +184,10 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data) {
 		}
 		if (GST_STATE(pipeline) == GST_STATE_PLAYING)
 			gui_state_change_to_playing_cb();
+		if (GST_STATE(pipeline) == GST_STATE_PLAYING && pause_on_state_change_to_playing) {
+			pause_on_state_change_to_playing = FALSE;
+			gstreamer_pause();
+		}
 		break;
 	case GST_MESSAGE_BUFFERING:
 		if (bus_quit_on_playing)
@@ -988,12 +993,20 @@ void gstreamer_previous_frame() {
 		double rate;
 		if (!get_framerate(&rate))
 			return;
-		pos -= GST_SECOND / rate;
-		if (pos >= 0) {
-			if (!gst_element_seek_simple(pipeline, GST_FORMAT_TIME,
-			GST_SEEK_FLAG_FLUSH, pos)) {
-				printf("gstplay: Seek failed!.n");
-			}
+		printf("Position = %ld, Rate = %lf\n", pos, rate);
+		pos -= ((gint64)GST_SECOND / rate) * 5;
+		if (pos < 0)
+			pos = 0;
+		printf("Position = %ld\n", pos);
+		if (gst_element_seek_simple(pipeline, GST_FORMAT_TIME,
+		GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE,
+		pos)) {
+			printf("gstplay: Seek succeeded\n");
+			pause_on_state_change_to_playing = TRUE;
+			gstreamer_play();
+		}
+		else {
+			printf("gstplay: Seek failed!.n");
 		}
 	}
 }
